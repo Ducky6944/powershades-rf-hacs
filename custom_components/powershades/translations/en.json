@@ -3,22 +3,31 @@
         "step": {
             "user": {
                 "title": "PowerShades",
-                "description": "Enter your PowerShades cloud account credentials.",
+                "description": "Enter the address of your PowerShades **RF gateway** (local, e.g. `10.0.30.239`). Cloud credentials are optional and only used to resolve shade names and absolute-position moves.",
                 "data": {
-                    "email": "Email",
-                    "password": "Password",
-                    "base_url": "API base URL (advanced)",
-                    "gateway": "Local RF Gateway address (optional)"
+                    "gateway": "RF gateway address",
+                    "base_url": "Cloud API base URL (default ok)",
+                    "api_key": "Cloud account API key (optional)",
+                    "email": "Cloud e-mail (optional, or API key)",
+                    "password": "Cloud password (optional, or API key)"
                 }
+            },
+            "name": {
+                "title": "Name channels",
+                "description": "No cloud credentials given, so names are unknown. Optionally name each linked channel ({count} found) to control them by name. Leave blank to use channel numbers.",
+                "data": {}
             }
         },
         "error": {
-            "cannot_connect": "Unable to reach the PowerShades API.",
+            "required": "Gateway address is required.",
+            "credential_conflict": "Use either an API key **or** e-mail+password, not both.",
+            "gateway_unreachable": "Could not reach the RF gateway. Check the address / network.",
+            "cannot_connect": "Could not reach the PowerShades cloud API.",
+            "invalid_auth": "Cloud credentials are invalid.",
             "unknown": "Unexpected error."
         },
         "abort": {
-            "invalid_auth": "Invalid email or password.",
-            "already_configured": "This account is already configured."
+            "already_configured": "This gateway is already configured."
         }
     }
 }

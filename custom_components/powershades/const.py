@@ -8,8 +8,15 @@ PLATFORMS = [Platform.BUTTON, Platform.COVER, Platform.SENSOR]
 
 CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
+CONF_API_KEY = "api_key"
 CONF_BASE_URL = "base_url"
 CONF_GATEWAY = "gateway"
+# Optional user-supplied channel -> name map (when names can't be resolved).
+CONF_CHANNEL_NAMES = "channel_names"
+
+# How credentials are provided (config flow) — auth mode is derived from keys present.
+AUTH_MODE_EMAIL = "email"
+AUTH_MODE_API_KEY = "api_key"
 
 DEFAULT_BASE_URL = "https://api.powershades.com"
 
@@ -38,3 +45,8 @@ GW_VARIABLES = (
     *GW_CHNAME_VARS,
 )
 GW_AJAX_PATH = "/ajax.shtml"
+# Local gateway up/down/stop control (GET with a single channel param).
+GW_CMD_QUERY = "ajax.shtml"
+GW_CMD_UP = "up"
+GW_CMD_DOWN = "down"
+GW_CMD_STOP = "stop"

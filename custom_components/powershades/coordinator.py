@@ -1,182 +1,147 @@
-"""Data coordinator for the PowerShades integration (one per account)."""
+"""Data coordinator for PowerShades (one per config entry).
+
+Local-first: the **local RF gateway** is the live *state plane* (position,
+battery, RF signal) and is re-fetched every poll. The **cloud API** is optional
+*enrichment* (shade names, groups, scenes) fetched on a slow clock and cached;
+a cloud outage never breaks local control.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
-from dataclasses import dataclass, field
 from datetime import timedelta
 
-import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import aiohttp_client
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .client import PowerShadesClient, PowerShadesError, PowerShadesUnavailable
-from .const import CONF_BASE_URL, CONF_EMAIL, CONF_GATEWAY, CONF_PASSWORD, DEFAULT_BASE_URL, DOMAIN
+from .client import PowerShadesClient, PowerShadesError
+from .const import (
+    CONF_API_KEY,
+    CONF_BASE_URL,
+    CONF_EMAIL,
+    CONF_GATEWAY,
+    CONF_PASSWORD,
+    DEFAULT_BASE_URL,
+    DOMAIN,
+    GW_VARIABLES,
+)
+from .types import GatewayChannel, GroupInfo, PowerShadesData, SceneInfo, ShadeInfo
 
 _LOGGER = logging.getLogger(__name__)
 
 PowerShadesConfigEntry = ConfigEntry["PowerShadesCoordinator"]
 
+# Re-fetch cloud lists at most every N seconds; the gateway polls every N seconds.
+CLOUD_REFRESH_SECONDS = 300.0
+GATEWAY_POLL_SECONDS = 10
+
 
 def _now() -> float:
-    """Monotonic clock, split out so it can be patched in tests."""
+    """Monotonic clock (split out so it can be patched in tests)."""
     return time.monotonic()
 
 
-@dataclass(frozen=True)
-class ShadeInfo:
-    """A shade plus its static metadata."""
-
-    id: int
-    name: str
-    device_id: int
-    property_id: int
-    attributes: dict[str, str] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class GroupInfo:
-    id: int
-    name: str
-    shades: tuple[int, ...]
-
-
-@dataclass(frozen=True)
-class SceneInfo:
-    id: int
-    name: str
-
-
-@dataclass(frozen=True)
-class GatewayChannel:
-    """One local RF gateway channel."""
-
-    channel: int
-    percent: int | None = None  # 0..100; None = not reporting
-    battery_v: float | None = None
-    rx_db: int | None = None
-    device_id: str | None = None  # RF device id, may be hex (e.g. "aabbccdd")
-    name: str | None = None
-
-
-@dataclass(frozen=True)
-class PowerShadesData:
-    """Snapshot of the whole PowerShades account."""
-
-    shades: list[ShadeInfo]
-    groups: list[GroupInfo]
-    scenes: list[SceneInfo]
-    gateway: list[GatewayChannel] = field(default_factory=list)
-
-
 class PowerShadesCoordinator(DataUpdateCoordinator[PowerShadesData]):
-    """Fetch shades, groups, scenes, and (optionally) local gateway state."""
+    """Local gateway state (primary) + optional cloud names/groups/scenes."""
 
     config_entry: PowerShadesConfigEntry
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        entry: PowerShadesConfigEntry,
-    ) -> None:
+    def __init__(self, hass: HomeAssistant, entry: PowerShadesConfigEntry) -> None:
         super().__init__(
             hass,
             _LOGGER,
-            name=f"PowerShades {entry.data[CONF_EMAIL]}",
-            update_interval=timedelta(seconds=10),
+            name=f"PowerShades {entry.title}",
+            update_interval=timedelta(seconds=GATEWAY_POLL_SECONDS),
             config_entry=entry,
         )
         self._session = aiohttp_client.async_create_clientsession(hass)
+        data = entry.data
+        self._cloud_configured = bool(data.get(CONF_EMAIL) or data.get(CONF_API_KEY))
         self._client = PowerShadesClient(
             self._session,
-            entry.data[CONF_EMAIL],
-            entry.data[CONF_PASSWORD],
-            entry.data.get(CONF_BASE_URL, DEFAULT_BASE_URL),
+            gateway=data.get(CONF_GATEWAY),
+            email=data.get(CONF_EMAIL),
+            password=data.get(CONF_PASSWORD),
+            api_key=data.get(CONF_API_KEY),
+            base_url=data.get(CONF_BASE_URL, DEFAULT_BASE_URL),
         )
-        self._gateway_url: str | None = entry.data.get(CONF_GATEWAY)
-        # Cloud lists (shades/groups/scenes/attrs) change rarely, so we cache
-        # them and only re-fetch on a slow clock. The local gateway is the live
-        # state plane and is re-fetched every poll.
+        self._gateway_url: str | None = data.get(CONF_GATEWAY)
+        # Cloud-side cache (names/groups/scenes change rarely).
         self._cloud: list | None = None
         self._cloud_at: float | None = None
-        self._CLOUD_REFRESH_SECONDS = 300.0  # re-fetch cloud lists at most every 5 min
+        # Last good gateway read, so a gateway hiccup doesn't blank the UI.
+        self._last_gateway: list[GatewayChannel] | None = None
 
     @property
     def client(self) -> PowerShadesClient:
-        """The underlying cloud API client."""
         return self._client
 
     @property
     def entry(self) -> PowerShadesConfigEntry:
-        """The owning config entry (alias for ``config_entry``)."""
+        """Alias for ``config_entry`` (entry.data holds secrets)."""
         return self.config_entry
 
     @property
+    def cloud_configured(self) -> bool:
+        """True if the user supplied cloud credentials (email/pw or api key)."""
+        return self._cloud_configured
+
+    @property
+    def channel_names(self) -> dict[int, str]:
+        """Optional user-supplied channel -> name overrides."""
+        raw = self.config_entry.data.get("channel_names") or {}
+        return {int(k): str(v) for k, v in raw.items() if str(v)}
+
+    @property
     def device_info(self) -> dict:
-        """Shared device registry info for the account."""
+        """Shared device-registry group for the account (cloud-only entities)."""
         return {
             "identifiers": {(DOMAIN, self.config_entry.entry_id)},
-            "name": "PowerShades",
+            "name": "PowerShades Account",
             "manufacturer": "PowerShades",
             "model": "Cloud",
         }
 
-    async def _fetch_gateway(self) -> list[GatewayChannel]:
-        from .const import GW_AJAX_PATH, GW_VARIABLES
+    def channel_device_info(self, ch: GatewayChannel) -> dict:
+        """Device-registry entry for one RF gateway channel (the live plane)."""
+        ident = (DOMAIN, f"{self.config_entry.entry_id}:gw:{ch.channel}")
+        name = f"PowerShades Gateway Ch {ch.channel}"
+        if ch.name:
+            name = f"{ch.name} (gateway ch {ch.channel})"
+        info: dict = {
+            "identifiers": {ident},
+            "name": name,
+            "manufacturer": "PowerShades",
+            "model": "RF Gateway",
+        }
+        if ch.device_id:
+            info["model"] = f"RF Gateway (device {ch.device_id})"
+        return info
 
-        url = f"{self._gateway_url}{GW_AJAX_PATH}?var=" + ",".join(GW_VARIABLES)
+    # -- gateway (primary plane) -------------------------------------------
+
+    async def _fetch_gateway(self) -> list[GatewayChannel] | None:
+        if not self._gateway_url:
+            return None
         try:
-            async with self._session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                text = await resp.text()
-                payload = json.loads(text)
-        except (aiohttp.ClientError, ValueError, TimeoutError) as err:
-            _LOGGER.debug("Gateway read failed: %s", err)
-            return []
-        if not isinstance(payload, list) or len(payload) < 4:
-            return []
-        try:
-            percent = _cells(payload[0]) if isinstance(payload[0], str) else []
-            battery = _cells(payload[1]) if isinstance(payload[1], str) else []
-            rx = _cells(payload[2]) if isinstance(payload[2], str) else []
-            rfdevs = _cells(payload[3]) if isinstance(payload[3], str) else []
-            chnames = _flatten_names(payload[4:])
-        except (IndexError, AttributeError):
-            return []
-        channels: list[GatewayChannel] = []
-        count = max(len(percent), 30)
-        for ch in range(1, count + 1):
-            i = ch - 1
-            channels.append(
-                GatewayChannel(
-                    channel=ch,
-                    percent=_opt(percent, i),
-                    battery_v=_optb(battery, i),
-                    rx_db=_opt(rx, i),
-                    device_id=_optdev(rfdevs, i),
-                    name=(chnames[i] if i < len(chnames) and chnames[i] else None),
-                )
-            )
-        return channels
+            return await self._client.fetch_gateway(GW_VARIABLES)
+        except Exception:  # gateway is best-effort: never raise here
+            _LOGGER.debug("Gateway read failed", exc_info=True)
+            return None
 
-    async def _cloud_lists(self) -> tuple:
-        """Fetch (or return cached) static cloud lists.
+    # -- cloud (optional enrichment) ---------------------------------------
 
-        The cloud is hit at most every ``_CLOUD_REFRESH_SECONDS``; on a
-        transient cloud error we fall back to the last good cache rather than
-        failing the whole update.
-        """
+    async def _cloud_lists(self) -> tuple | None:
+        """Fetch (or reuse cache of) static cloud lists; degrade gracefully."""
         now = _now()
-        if (
-            self._cloud is not None
-            and self._cloud_at is not None
-            and (now - self._cloud_at) < self._CLOUD_REFRESH_SECONDS
-        ):
+        if self._cloud is not None and self._cloud_at is not None and (now - self._cloud_at) < CLOUD_REFRESH_SECONDS:
             return self._cloud
+        if not self._cloud_configured:
+            return self._cloud  # may be None -> no names
         try:
             cloud = await asyncio.gather(
                 self._client.fetch_shades(),
@@ -191,93 +156,54 @@ class PowerShadesCoordinator(DataUpdateCoordinator[PowerShadesData]):
             if self._cloud is not None:
                 _LOGGER.debug("Cloud refresh failed; using last good cache: %s", err)
                 return self._cloud
-            raise
+            _LOGGER.debug("Cloud read failed: %s", err)
+            return self._cloud  # None -> no names, but local still works
+
+    # -- update -------------------------------------------------------------
 
     async def _async_update_data(self) -> PowerShadesData:
+        gateway = await self._fetch_gateway()
+        if gateway:
+            self._last_gateway = gateway
+        elif self._last_gateway is not None:
+            gateway = self._last_gateway
+        else:
+            gateway = []
+
+        cloud = await self._cloud_lists()
+        shades = groups = scenes = []
+        if cloud is not None:
+            shades_raw, groups_raw, scenes_raw, attrs_raw = cloud
+            shades, groups, scenes = _build_cloud(shades_raw, groups_raw, scenes_raw, attrs_raw)
+
+        return PowerShadesData(gateway=gateway, shades=shades, groups=groups, scenes=scenes)
+
+
+def _attrs_by_shade(attrs_raw: list[dict]) -> dict[int, dict[str, str]]:
+    by_id: dict[int, dict[str, str]] = {}
+    for a in attrs_raw or []:
         try:
-            shades_raw, groups_raw, scenes_raw, attrs_raw = await self._cloud_lists()
-            gateway = await self._optional_gateway()
-        except PowerShadesUnavailable as err:
-            raise UpdateFailed(f"Unable to reach PowerShades API: {err}") from err
-        except PowerShadesError as err:
-            raise UpdateFailed(f"PowerShades API error: {err}") from err
-        return _build_data(shades_raw, groups_raw, scenes_raw, attrs_raw, gateway)
-
-    async def _optional_gateway(self) -> list[GatewayChannel]:
-        if not self._gateway_url:
-            return []
-        try:
-            return await self._fetch_gateway()
-        except Exception:  # gateway is optional; never fail the update
-            _LOGGER.debug("Gateway read failed; continuing without it", exc_info=True)
-            return []
+            sid = int(a["shade_id"])
+        except (KeyError, ValueError):
+            continue
+        by_id.setdefault(sid, {})[a["attribute"]] = a["value"]
+    return by_id
 
 
-def _cells(value: object) -> list[str]:
-    if not isinstance(value, str):
-        return []
-    return value.split(":")
-
-
-def _flatten_names(rows: object) -> list[str]:
-    if not isinstance(rows, list):
-        return []
-    out: list[str] = []
-    for row in rows:
-        if isinstance(row, str):
-            out.extend(row.split(":"))
-        elif isinstance(row, list):
-            out.extend(str(x) for x in row)
-    return out
-
-
-def _opt(values: list[str], i: int) -> int | None:
-    if i < len(values):
-        try:
-            n = int(values[i])
-        except ValueError:
-            return None
-        return None if n < 0 else n
-    return None
-
-
-def _optb(values: list[str], i: int) -> float | None:
-    if i < len(values):
-        try:
-            mv = int(values[i])
-        except ValueError:
-            return None
-        if mv > 0:
-            return round(mv / 1000.0, 2)
-    return None
-
-
-def _optdev(values: list[str], i: int) -> str | None:
-    if i < len(values):
-        v = values[i].strip()
-        if v and v != "0":
-            return v
-    return None
-
-
-def _build_data(
+def _build_cloud(
     shades_raw: list[dict],
     groups_raw: list[dict],
     scenes_raw: list[dict],
     attrs_raw: list[dict],
-    gateway: list[GatewayChannel],
-) -> PowerShadesData:
-    attrs_by_shade: dict[int, dict[str, str]] = {}
-    for a in attrs_raw or []:
-        attrs_by_shade.setdefault(int(a["shade_id"]), {})[a["attribute"]] = a["value"]
-
+) -> tuple[list[ShadeInfo], list[GroupInfo], list[SceneInfo]]:
+    attrs = _attrs_by_shade(attrs_raw)
     shades = [
         ShadeInfo(
             id=int(s["id"]),
             name=s["name"],
-            device_id=int(s.get("device_id", 0)),
-            property_id=int(s.get("property_id", 0)),
-            attributes=dict(attrs_by_shade.get(int(s["id"]), {})),
+            device_id=int(s.get("device_id", 0) or 0),
+            property_id=int(s.get("property_id", 0) or 0),
+            attributes=dict(attrs.get(int(s["id"]), {})),
         )
         for s in shades_raw or []
     ]
@@ -286,4 +212,4 @@ def _build_data(
         for g in groups_raw or []
     ]
     scenes = [SceneInfo(id=int(sc["id"]), name=sc["name"]) for sc in scenes_raw or []]
-    return PowerShadesData(shades=shades, groups=groups, scenes=scenes, gateway=gateway or [])
+    return shades, groups, scenes

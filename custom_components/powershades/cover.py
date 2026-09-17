@@ -1,4 +1,10 @@
-"""Cover platform for PowerShades (shades + groups)."""
+"""Cover platform for PowerShades.
+
+Local-first: one **cover per live RF gateway channel** — the primary control +
+state plane (up/down/stop, live position/battery via sensors). When the user
+supplies cloud credentials *and* names are known, **group** covers are added so
+absolute-position moves (which only exist on the cloud) are available for groups.
+"""
 
 from __future__ import annotations
 
@@ -13,11 +19,13 @@ from homeassistant.components.cover import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_EMAIL, DOMAIN
+from .const import DOMAIN
 from .coordinator import PowerShadesCoordinator
+from .types import GatewayChannel, GroupInfo
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,63 +37,61 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up cover entities for shades and groups."""
+    """Set up per-channel covers (primary) and optional cloud group covers."""
     coordinator: PowerShadesCoordinator = entry.runtime_data
     data = coordinator.data
 
-    entities: list[PowerShadesCover] = []
-    for shade in data.shades:
-        entities.append(PowerShadesCover(coordinator, "shade", shade.id, shade.name))
-    for group in data.groups:
-        entities.append(PowerShadesCover(coordinator, "group", group.id, group.name))
+    entities: list[CoverEntity] = []
+    for ch in data.gateway:
+        if ch.linked:
+            entities.append(PowerShadesChannelCover(coordinator, ch))
+    if coordinator.cloud_configured:
+        for group in data.groups:
+            entities.append(PowerShadesGroupCover(coordinator, group))
 
     async_add_entities(entities)
 
 
-class PowerShadesCover(CoordinatorEntity[PowerShadesCoordinator], CoverEntity):
-    """A single PowerShades shade or group."""
+class PowerShadesChannelCover(CoordinatorEntity[PowerShadesCoordinator], CoverEntity):
+    """A single shade exposed through its RF gateway channel."""
 
     _attr_has_entity_name = True
     _attr_device_class = CoverDeviceClass.SHADE
-    _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.SET_POSITION
+    _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP
 
-    def __init__(
-        self,
-        coordinator: PowerShadesCoordinator,
-        kind: str,
-        target_id: int,
-        name: str,
-    ) -> None:
+    def __init__(self, coordinator: PowerShadesCoordinator, ch: GatewayChannel) -> None:
         super().__init__(coordinator)
-        self._kind = kind
-        self._target_id = target_id
-        self._attr_name = name
-        self._attr_unique_id = f"{DOMAIN}_{coordinator.entry.data[CONF_EMAIL]}_{kind}_{target_id}"
-        self._attr_device_info = coordinator.device_info
-        self._attr_extra_state_attributes = {}
+        self._channel = ch.channel
+        self._attr_unique_id = f"{DOMAIN}_{coordinator.config_entry.entry_id}_ch{ch.channel}"
+        # Device registry: one device per RF channel (the live plane).
+        self._attr_device_info = coordinator.channel_device_info(ch)
+
+    # -- name (resolved local->cloud->manual->fallback) --------------------
+
+    def _ch(self) -> GatewayChannel | None:
+        return self.coordinator.data.channel(self._channel)
+
+    def _resolved_name(self) -> str:
+        ch = self._ch()
+        base = ch.name if ch else None
+        if not base:
+            base = self.coordinator.channel_names.get(self._channel)
+        if not base:
+            base = f"Channel {self._channel}"
+        return base
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        if self._kind == "shade":
-            shade = next((s for s in self.coordinator.data.shades if s.id == self._target_id), None)
-            if shade:
-                attrs: dict[str, Any] = {}
-                for attr, value in shade.attributes.items():
-                    key = attr.replace(" ", "_").lower()
-                    attrs[f"shade_{key}"] = value
-                return attrs
-        return {}
+    def name(self) -> str | None:
+        return self._resolved_name()
+
+    # -- state (from the live gateway plane) --------------------------------
 
     @property
     def current_cover_position(self) -> int | None:
-        # We don't track live position from the cloud API alone.
-        # Position is returned from the local gateway (if available).
-        # Without that, we report None (= unknown).
-        return None
-
-    @property
-    def is_closed(self) -> bool | None:
-        return None
+        ch = self._ch()
+        if ch is None or ch.percent is None:
+            return None
+        return ch.percent
 
     @property
     def is_opening(self) -> bool:
@@ -94,6 +100,75 @@ class PowerShadesCover(CoordinatorEntity[PowerShadesCoordinator], CoverEntity):
     @property
     def is_closing(self) -> bool:
         return False
+
+    @property
+    def available(self) -> bool:
+        ch = self._ch()
+        return ch is not None and ch.linked
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        ch = self._ch()
+        if ch is None:
+            return {}
+        attrs: dict[str, Any] = {}
+        if ch.device_id:
+            attrs["rf_device_id"] = ch.device_id
+        return attrs
+
+    # -- commands (local gateway up/down/stop only) -------------------------
+
+    async def async_open_cover(self, **kwargs: Any) -> None:
+        await self._gateway("up")
+
+    async def async_close_cover(self, **kwargs: Any) -> None:
+        await self._gateway("down")
+
+    async def async_stop_cover(self, **kwargs: Any) -> None:
+        await self._gateway("stop")
+
+    async def _gateway(self, cmd: str) -> None:
+        """Send up/down/stop over the local gateway (best-effort)."""
+        try:
+            if cmd == "up":
+                await self.coordinator.client.gateway_up(self._channel)
+            elif cmd == "down":
+                await self.coordinator.client.gateway_down(self._channel)
+            else:
+                await self.coordinator.client.gateway_stop(self._channel)
+        except Exception as err:  # don't let a control error kill the refresh
+            _LOGGER.warning("Gateway command '%s' ch%s failed: %s", cmd, self._channel, err)
+
+
+class PowerShadesGroupCover(CoordinatorEntity[PowerShadesCoordinator], CoverEntity):
+    """A cloud group (absolute position via the cloud API)."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = CoverDeviceClass.SHADE
+    _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.SET_POSITION
+
+    def __init__(self, coordinator: PowerShadesCoordinator, group: GroupInfo) -> None:
+        super().__init__(coordinator)
+        self._group_id = group.id
+        self._attr_unique_id = f"{DOMAIN}_{coordinator.config_entry.entry_id}_group_{group.id}"
+        self._attr_device_info = coordinator.device_info
+
+    def _group(self) -> GroupInfo | None:
+        return next((g for g in self.coordinator.data.groups if g.id == self._group_id), None)
+
+    @property
+    def name(self) -> str | None:
+        g = self._group()
+        return g.name if g else None
+
+    @property
+    def current_cover_position(self) -> int | None:
+        # Groups have no live position plane on the gateway; report unknown.
+        return None
+
+    @property
+    def is_closed(self) -> bool | None:
+        return None
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         await self._move(0)
@@ -104,18 +179,9 @@ class PowerShadesCover(CoordinatorEntity[PowerShadesCoordinator], CoverEntity):
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         await self._move(kwargs[ATTR_POSITION])
 
-    async def _move(self, percentage: int) -> None:
-        if self._kind == "shade":
-            shade = next((s for s in self.coordinator.data.shades if s.id == self._target_id), None)
-            if shade is None:
-                _LOGGER.warning("Shade %s not found in coordinator data", self._target_id)
-                return
-            await self.coordinator.client.move_shade(shade.name, 100 - percentage)
-        else:
-            group = next((g for g in self.coordinator.data.groups if g.id == self._target_id), None)
-            if group is None:
-                _LOGGER.warning("Group %s not found in coordinator data", self._target_id)
-                return
-            await self.coordinator.client.move_group(group.name, 100 - percentage)
-        # Trigger a coordinator refresh so UI updates
+    async def _move(self, ha_position: int) -> None:
+        name = self.name
+        if not name:
+            raise HomeAssistantError("Group name unavailable")
+        await self.coordinator.client.move_group(name, 100 - ha_position)
         await self.coordinator.async_request_refresh()
