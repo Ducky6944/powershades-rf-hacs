@@ -91,3 +91,25 @@ The shade system has a **local RF Gateway** (lwIP web server) at `http://192.0.2
 - Config flow: validate credentials in the flow (call `/auth/jwt/`), handle unique_id per credential.
 - Cover platform maps to `cover` entities; scenes → `scene`/`button`; groups → `cover` too.
 - HACS: needs `manifest.json` + `custom_components/powershades/`. For HACS listing the repo should be a standalone repo (this one) with proper `name`, `domain` powershades.
+
+## What's built (as of 2026-09-17)
+Working scaffold committed. Structure at `custom_components/powershades/`:
+- **client.py** — JWT auth (login/refresh/re-login, one 401 retry), cloud reads (`/shades/`,`/groups/`,`/scenes/`,`/shadeattributes/`) + commands (`/shades/move/`,`/groups/move/`,`/scenes/move/`). `aiohttp` under the hood.
+- **config_flow.py** — email + password (+ optional base_url, optional local-gateway address). Validates via real login before creating the entry. `unique_id = email.lower()`.
+- **coordinator.py** — `DataUpdateCoordinator`. Cloud lists **cached** (re-fetched ≤ every 5 min) + local-gateway state **re-fetched every ~10 s** (it's the live plane). Cloud failure falls back to last-good cache.
+- **cover.py** — one cover per shade + one per group. open→cloud 0, close→cloud 100, `set_position N`→cloud `100-N`.
+- **button.py** — one button per scene.
+- **sensor.py** — per linked gateway channel: position, battery (V), rx (dB).
+- Lint clean under ruff 0.16.8 (`python3 -m ruff check` + `ruff format --check`).
+
+**Verified live:** 10 shades + 2 groups resolved; move commands issue correct percentages (open→0, close→100, set 40→cloud 60, group 60→cloud 40); local gateway reports channels 1/2/3/5 linked (positions 100/100/100/100, battery 12.06/12.32/12.57 V, hex device ids). Position is "set-and-optimistic" (cloud has no consumer read); live position comes from the gateway sensors.
+
+## Still to do (incremental, one commit each)
+1. **Install & test in a real Home Assistant** (copy `custom_components/` into HA's config dir, or use HACS local). Confirm config flow UI, cover open/close, sensors, device registry grouping.
+2. **Stop support** — no cloud stop endpoint; consider a gateway `stop=<ch>` where a channel is linked, else document as unsupported.
+3. **Options flow** — change password / disable gateway / tune poll interval without recreating the entry.
+4. **`manifest.json` codeowners** — replace `@crash` with real GitHub handle before HACS listing.
+5. **Icon** — `icons.png` is a generated placeholder; swap for real PowerShades branding.
+6. **Scene button test** — create a scene in the account to verify the button path.
+7. **Tests** — add `tests/` with pytest fixtures (mocked client) for coordinator parse + refresh, no live network in CI.
+8. **HACS listing** — `integration_type: third_party`; request listing once install+tests are green.
