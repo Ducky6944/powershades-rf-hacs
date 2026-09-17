@@ -73,7 +73,7 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
             creds = bool(api_key) or (bool(email) and bool(password))
             if api_key and (email or password):
                 errors["base"] = "credential_conflict"
-                return self._show_user(user_input, errors)
+                return self._show_user(errors)
 
             if gateway:
                 await self.async_set_unique_id(_gateway_key(gateway))
@@ -97,7 +97,7 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
             if not gateway:
                 errors["base"] = "required"
             if errors:
-                return self._show_user(user_input, errors)
+                return self._show_user(errors)
 
             if creds:
                 return self.async_create_entry(
@@ -110,10 +110,10 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
             return await self.async_step_name(None)
 
-        return self._show_user(user_input, errors)
+        return self._show_user(errors)
 
-    def _show_user(self, user_input, errors):
-        return self.async_show_form(initial_values=user_input, schema=USER_SCHEMA, errors=errors)
+    def _show_user(self, errors):
+        return self.async_show_form(step_id="user", data_schema=USER_SCHEMA, errors=errors)
 
     # -- step 2: manual channel naming (when no cloud credentials) -------
 
@@ -131,7 +131,7 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = {vol.Optional(f"ch{n}"): vol.Coerce(str) for n in self._linked}
         return self.async_show_form(
             step_id="name",
-            schema=vol.Schema(schema),
+            data_schema=vol.Schema(schema),
             description_placeholders={"count": len(self._linked), "gateway": self._gateway or ""},
         )
 
