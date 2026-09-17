@@ -22,5 +22,10 @@ venv/
 .coverage
 .pytest_cache/
 
+# Live-captured dashboard debug dumps (contain account secrets — do not commit)
+references/dash_*.html
+references/dash_*.js
+references/dash_probe.sh
+
 # Keep tracked icons, ignore OS clutter
 !custom_components/*/icons.png
