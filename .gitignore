@@ -1,3 +1,9 @@
+# Secrets / local credentials (never commit)
+.env
+.env.*
+*.credentials
+credentials.json
+
 # Byte-compiled / caches
 __pycache__/
 *.py[cod]

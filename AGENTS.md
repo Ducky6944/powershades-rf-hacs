@@ -8,7 +8,7 @@ A HACS-installable Home Assistant custom integration for **PowerShades** smart w
 ## Non-negotiables
 - **Do not guess.** When behavior is unclear, probe the live API (curl), read the real docs, or read a working implementation's source. Prefer evidence over theory.
 - **Commit everything.** Baseline + every feature = its own commit.
-- Keep secrets out of the repo. The test credentials (`user@example.com` / `your_password`) are for local testing only; never hardcode them in integration source. Read env or config.
+- Keep secrets out of the repo. All credentials / API keys / gateway addresses live only in `.env` (gitignored) — never in integration source or docs. Read them from the env for local testing: `POWERSHADES_API_KEY`, `POWERSHADES_EMAIL`, `POWERSHADES_PASSWORD`, `POWERSHADES_GATEWAY`.
 - Follow existing conventions before inventing new ones.
 
 ## Environment (verified 2026-09-17)
