@@ -1,0 +1,4 @@
+# Local lint/test tooling (not pulled into Home Assistant).
+ruff>=0.5
+# Home Assistant itself must already be present in the environment for imports
+# to resolve when running the client/coordinator ad hoc.

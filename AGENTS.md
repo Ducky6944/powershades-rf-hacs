@@ -53,10 +53,36 @@ A HACS-installable Home Assistant custom integration for **PowerShades** smart w
 - `apumapho/homebridge-powershades` — **cloud REST** client in `api.js` (saved at `references/homebridge_api.js`). Best cloud auth/endpoint reference.
 - `developer-powershades/savant-powershades-profile` — official vendor Savant profile.
 
+## Local RF Gateway — VERIFIED (2026-09-17)
+
+The shade system has a **local RF Gateway** (lwIP web server) at `http://192.0.2.48` (serial `1010110000000000`, 30 RF channels, "Connected to Powershades Cloud"). This is the **live state / feedback plane** and the local control plane.
+
+### Read (GET `ajax.shtml?var=<name1>,<name2>` → JSON **array**, one element per requested var in order)
+| var | shape | meaning |
+|-----|-------|---------|
+| `percent` | 30 colon-seps, `0..100` or `-1` | per-channel position, -1 = no shade on channel / not reporting |
+| `battery` | 30, **mV** (`*0.001`→V) | per-channel battery; 0 = none |
+| `rx` | 30, dB | per-channel RF rssi |
+| `rfdevs` | 30, RF id or `0` | per-channel linked device id; 0 = unlinked |
+| `chnames1` / `chnames2` / `chnames3` | 10 each (ch 1-10 / 11-20 / 21-30) | per-channel names |
+| `netsts` `rfsts` `rssi` `version` `curfwpg` | single | gateway status / firmware |
+
+**Current state:** `rfdevs` all `0`, `chnames` blank, `percent`/`battery` all `-1`/0 → **no RF device linked to any channel yet.** That's why positions look empty. Commands still "work" (200) but nothing physically responds until a device is paired via the gateway UI (`/device.shtml`: Pair / Link Feedback buttons) or a shade reports.
+
+### Commands (GET, `200` w/ empty body)
+- `ajax.shtml?up=<ch>` / `down=<ch>` / `stop=<ch>` — **local has NO absolute percent set**; only up/down/stop.
+- `?pair=<ch>` → pairing mode, `?link=<ch>` → link feedback, `?p2=<ch>`.
+- So **absolute position control (open/close/percent) must go through the CLOUD API** (`/shades/move/`), while the **gateway gives live position/battery/feedback** for readback once a device reports.
+
+### Decided integration strategy
+- **Control plane = cloud API** (email/password JWT): open/close/set_position + groups + scenes. This is the user's primary want (send open/close).
+- **State plane = local gateway** (optional in options flow): read `percent`/`battery`/`rx`/`rfdevs`/`chnames` per channel → live cover position + battery sensor + rx sensor. Only populated once a device reports on a channel.
+- **Open/close semantics:** cloud API `percentage`: `0 = open`, `100 = closed`. HA cover: `0 = closed`, `100 = open` → map `cloud_pct = 100 - ha_pos`; open→0, close→100.
+
 ## Open questions (resolve, don't guess)
-1. **How do we read live position?** Consumer account gets 403 on `/devices/`. Options: (a) user is dealer / has device-permission; (b) position is derivable from `/shades/` + `/shadeattributes/` (need to confirm which field); (c) a different endpoint not in the CoreAPI doc. **Must confirm before exposing cover entities.**
-2. Percentage direction (0 = open vs 100 = open?).
-3. Exact schema of `/devices/` (unseen) for mapping position/battery.
+1. ~~How do we read live position?~~ → **Local gateway `ajax.shtml?var=percent,battery,rfdevs`** (see above). Confirm a device actually reports by pairing/linking one channel to a real shade and re-reading.
+2. ~~Percentage direction~~ → **cloud 0=open, 100=closed** (verified in move messages).
+3. Does channel N on the gateway map 1:1 to a specific cloud shade? (No explicit channel field in `/shades/` or `/shadeattributes/`. Resolve by pairing one channel and observing which shade's `percent` changes.)
 
 ## Good practices for the HACS integration
 - Modern async: `aiohttp.ClientSession` via `httpx`? No — use `aiohttp` (HA-native). Store session on the config entry; close in `async_unload_entry`.

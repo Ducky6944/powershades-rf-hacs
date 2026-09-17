@@ -1,0 +1,20 @@
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Testing / coverage
+.htmlcov/
+.coverage
+.pytest_cache/
+
+# Keep tracked icons, ignore OS clutter
+!custom_components/*/icons.png

@@ -1,0 +1,11 @@
+{
+  "domain": "powershades",
+  "name": "PowerShades",
+  "codeowners": ["@crash"],
+  "config_flow": true,
+  "documentation": "https://github.com/crash/powershades-hacs",
+  "issue_tracker": "https://github.com/crash/powershades-hacs/issues",
+  "iot_class": "cloud_polling",
+  "integration_type": "third_party",
+  "version": "0.1.0"
+}

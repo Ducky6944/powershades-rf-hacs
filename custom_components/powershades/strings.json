@@ -1,0 +1,24 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "PowerShades",
+                "description": "Enter your PowerShades cloud account credentials.",
+                "data": {
+                    "email": "Email",
+                    "password": "Password",
+                    "base_url": "API base URL (advanced)",
+                    "gateway": "Local RF Gateway address (optional)"
+                }
+            }
+        },
+        "error": {
+            "cannot_connect": "Unable to reach the PowerShades API.",
+            "unknown": "Unexpected error."
+        },
+        "abort": {
+            "invalid_auth": "Invalid email or password.",
+            "already_configured": "This account is already configured."
+        }
+    }
+}
