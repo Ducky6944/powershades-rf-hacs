@@ -22,6 +22,9 @@ venv/
 .coverage
 .pytest_cache/
 
+# Session transcripts
+/transcripts/
+
 # Live-captured dashboard debug dumps (contain account secrets — do not commit)
 references/dash_*.html
 references/dash_*.js
