@@ -114,7 +114,8 @@ class PowerShadesChannelCover(CoordinatorEntity[PowerShadesCoordinator], CoverEn
         ch = self._ch()
         if ch is None or ch.percent is None:
             return None
-        return ch.percent
+        # gateway percent: 0=open, 100=closed. HA position: 0=closed, 100=open.
+        return 100 - ch.percent
 
     @property
     def available(self) -> bool:
