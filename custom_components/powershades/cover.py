@@ -85,13 +85,21 @@ class PowerShadesChannelCover(CoordinatorEntity[PowerShadesCoordinator], CoverEn
         return self._resolved_name()
 
     # -- state (from the live gateway plane) --------------------------------
+    # The base CoverEntity.state resolves from is_opening/is_closing/is_closed,
+    # so provide those (current_cover_position is an optional extra alongside).
 
     @property
-    def current_cover_position(self) -> int | None:
+    def is_closed(self) -> bool | None:
         ch = self._ch()
         if ch is None or ch.percent is None:
             return None
-        return ch.percent
+        # gateway/cloud percent: 0 = fully open, 100 = fully closed.
+        return ch.percent >= 99
+
+    @property
+    def is_open(self) -> bool | None:
+        closed = self.is_closed
+        return None if closed is None else not closed
 
     @property
     def is_opening(self) -> bool:
@@ -100,6 +108,13 @@ class PowerShadesChannelCover(CoordinatorEntity[PowerShadesCoordinator], CoverEn
     @property
     def is_closing(self) -> bool:
         return False
+
+    @property
+    def current_cover_position(self) -> int | None:
+        ch = self._ch()
+        if ch is None or ch.percent is None:
+            return None
+        return ch.percent
 
     @property
     def available(self) -> bool:

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfElectricPotential
 from homeassistant.core import HomeAssistant
@@ -48,7 +48,7 @@ async def async_setup_entry(
                 coordinator,
                 ch.channel,
                 "battery",
-                SensorDeviceClass.BATTERY,
+                None,
                 UnitOfElectricPotential.VOLT,
                 EntityCategory.DIAGNOSTIC,
             )
