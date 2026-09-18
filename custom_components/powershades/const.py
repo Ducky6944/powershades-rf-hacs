@@ -21,6 +21,14 @@ CONF_TRAVEL_TIMES = "travel_times"
 # one or more of "percent", "battery", "rx", "device_id". Absent = infer at
 # setup time (any key seen as non-None in the first gateway read).
 CONF_AVAILABLE = "available"
+# Per-channel source of "current position" shown by the cover UI:
+# {"<channel>": "estimate"|"gateway", ...}. Absent / missing key = "estimate"
+# (our own time-based record of the last command), which is the default because
+# the gateway's live read can lag or jump while a shade is mid-travel.
+CONF_POSITION_SOURCE = "position_source"
+# Values for ``position_source``.
+POSITION_SOURCE_ESTIMATE = "estimate"
+POSITION_SOURCE_GATEWAY = "gateway"
 
 # Local RF gateway ajax vars (colon-separated 30 channels unless noted)
 GW_VAR_PERCENT = "percent"

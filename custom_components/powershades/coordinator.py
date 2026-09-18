@@ -16,7 +16,17 @@ from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .client import PowerShadesClient, PowerShadesError
-from .const import CONF_GATEWAY, CONF_TRAVEL_TIME, CONF_TRAVEL_TIMES, DOMAIN, GW_VARIABLES
+from .const import (
+    CONF_CHANNEL_NAMES,
+    CONF_GATEWAY,
+    CONF_POSITION_SOURCE,
+    CONF_TRAVEL_TIME,
+    CONF_TRAVEL_TIMES,
+    DOMAIN,
+    GW_VARIABLES,
+    POSITION_SOURCE_ESTIMATE,
+    POSITION_SOURCE_GATEWAY,
+)
 from .types import GatewayChannel, GroupInfo, PowerShadesData
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,10 +37,14 @@ GATEWAY_POLL_SECONDS = 3
 DEFAULT_TRAVEL_TIME = 20.0
 
 
-def _to_channel(raw: dict) -> GatewayChannel:
+def _to_channel(raw: dict, user_names: dict[str, str] | None) -> GatewayChannel:
+    """Build a :class:`GatewayChannel`, preferring the user's name over the
+    gateway's own ``chnames`` (which we don't control and may be blank)."""
+    channel = int(raw.get("channel", 0))
+    user_name = (user_names or {}).get(str(channel)) if channel else None
     return GatewayChannel(
-        channel=int(raw.get("channel", 0)),
-        name=raw.get("name"),
+        channel=channel,
+        name=user_name or raw.get("name"),
         device_id=raw.get("device_id"),
         percent=raw.get("percent"),
         battery_v=raw.get("battery_v"),
@@ -104,6 +118,37 @@ class PowerShadesCoordinator(DataUpdateCoordinator[PowerShadesData]):
         return self._estimates.get(int(channel))
 
     @property
+    def channel_names(self) -> dict[str, str]:
+        """User-supplied channel -> name map (keys are strings of the channel).
+        Absent / missing key = no custom name for that channel."""
+        raw = self.config_entry.data.get(CONF_CHANNEL_NAMES) or {}
+        out: dict[str, str] = {}
+        for k, v in raw.items():
+            try:
+                ch = int(str(k))
+            except (TypeError, ValueError):
+                continue
+            if ch > 0 and v:
+                out[str(ch)] = str(v)
+        return out
+
+    def position_source_for(self, channel: int) -> str:
+        """Position source for one channel: ``"estimate"`` or ``"gateway"``.
+
+        Defaults to ``estimate`` (our own time-based record) because the
+        gateway's live read can be stale / mid-travel. A per-shade override
+        comes from ``position_source`` in the entry data.
+        """
+        overrides = self.config_entry.data.get(CONF_POSITION_SOURCE) or {}
+        try:
+            val = overrides.get(str(int(channel)))
+        except (TypeError, ValueError):
+            val = None
+        if val in (POSITION_SOURCE_ESTIMATE, POSITION_SOURCE_GATEWAY):
+            return str(val)
+        return POSITION_SOURCE_ESTIMATE
+
+    @property
     def user_groups(self) -> list[GroupInfo]:
         """User-defined local groups: ``{"<name>": [ch1, ch2, ...], ...}``."""
         raw = self.config_entry.data.get("groups") or {}
@@ -161,7 +206,7 @@ class PowerShadesCoordinator(DataUpdateCoordinator[PowerShadesData]):
         except PowerShadesError as err:
             _LOGGER.debug("Gateway read failed (will use last good): %s", err)
         if gateway:
-            self._last_gateway = [_to_channel(g) for g in gateway]
+            self._last_gateway = [_to_channel(g, self.channel_names) for g in gateway]
         elif self._last_gateway is None:
             self._last_gateway = []
         return PowerShadesData(gateway=self._last_gateway)

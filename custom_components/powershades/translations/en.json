@@ -11,11 +11,12 @@
             },
             "channel": {
                 "title": "Identifying channel {n} of {m}",
-                "description": "This is a linked channel. Pick **Up** or **Down** and tap **Next** to nudge that physical shade — watch which window moves.\n\nDo this as many times as you need to find it. When you've matched it, type a **name** and its **travel time** (seconds, how long it actually takes), tick **Move on to next**, then Next.\n\nLeave name/travel blank to skip them.",
+                "description": "This is a linked channel. Pick **Up** or **Down** and tap **Next** to nudge that physical shade — watch which window moves.\n\nDo this as many times as you need to find it. When you've matched it, set a **name**, its **travel time** (seconds), and a **position source**:\n\n- **estimate** (default) — HA tracks the position from your own last command (time-based). Reliable, never shows a stale/jumping mid-travel reading.\n- **gateway** — show the shade controller's live reading. Use only if you trust the live read.\n\nThen tick **Move on to next** and Next. (Use the **Back** button to step back if you need to.)",
                 "data": {
                     "action": "Nudge (up or down)",
                     "name": "Name (optional)",
                     "travel_time": "Travel time for THIS shade, seconds (optional)",
+                    "position_source": "Position source",
                     "advance": "I'm done with this shade — move on to the next"
                 }
             },
@@ -42,12 +43,13 @@
         "step": {
             "init": {
                 "title": "PowerShades options",
-                "description": "Update the **base** travel time, per-shade travel times, names, and groups — without re-adding the integration.\n\nTravel-time and name lines: `channel=value` per line (travel in seconds).\nGroups: `Name: 1,2,3` per line.\n\nLeave any of them blank to leave them unchanged.",
+                "description": "Update the **base** travel time, per-shade travel times, names, position sources, and groups — without re-adding the integration.\n\nTravel-time / name / position-source lines: `channel=value` per line (travel in seconds). Position source = `estimate` (default) or `gateway`.\nGroups: `Name: 1,2,3` per line.\n\nLeave any of them blank to leave them unchanged.",
                 "data": {
                     "travel_time": "Base full-travel time (seconds)",
                     "groups": "Groups (one per line)",
                     "travel_times": "Per-shade travel time (one `channel=seconds` per line)",
-                    "channel_names": "Channel names (one `channel=Name` per line)"
+                    "channel_names": "Channel names (one `channel=Name` per line)",
+                    "position_source": "Per-shade position source (one `channel=estimate` or `channel=gateway` per line)"
                 }
             }
         }

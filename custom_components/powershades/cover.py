@@ -31,7 +31,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from ._movement import close_channel, open_channel, set_position as move_to_position
-from .const import DOMAIN
+from .const import DOMAIN, POSITION_SOURCE_GATEWAY
 from .coordinator import PowerShadesCoordinator
 from .types import GatewayChannel, GroupInfo
 
@@ -120,9 +120,12 @@ class PowerShadesChannelCover(_AssumedStateCover):
     @property
     def current_cover_position(self) -> int | None:
         ch = self._ch()
-        if ch is None or ch.percent is None:
+        if ch is None:
             return None
-        return int(ch.percent)
+        if self.coordinator.position_source_for(self._channel) == POSITION_SOURCE_GATEWAY:
+            return int(ch.percent) if ch.percent is not None else None
+        est = self.coordinator.estimate(self._channel)
+        return int(est) if est is not None else None
 
     @property
     def available(self) -> bool:
@@ -142,9 +145,11 @@ class PowerShadesChannelCover(_AssumedStateCover):
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         target = int(kwargs[ATTR_POSITION])
+        # Record the target up front (optimistic) so the UI shows it for the
+        # whole move — consistent with open/close, which also set instantly.
+        self.coordinator.record_estimate(self._channel, target)
         travel = self.coordinator.travel_time_for(self._channel)
         await move_to_position(self.coordinator.client, self._channel, target, travel)
-        self.coordinator.record_estimate(self._channel, target)
 
 
 class PowerShadesLocalGroupCover(_AssumedStateCover):
