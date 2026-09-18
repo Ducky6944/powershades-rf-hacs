@@ -11,10 +11,12 @@ A HACS-installable Home Assistant custom integration for **PowerShades** smart w
 - Keep secrets out of the repo. All credentials / API keys / gateway addresses live only in `.env` (gitignored) — never in integration source or docs. Read them from the env for local testing: `POWERSHADES_API_KEY`, `POWERSHADES_EMAIL`, `POWERSHADES_PASSWORD`, `POWERSHADES_GATEWAY`.
 - Follow existing conventions before inventing new ones.
 
-## Environment (verified 2026-09-17)
+## Environment (verified 2026-09-18)
 - macOS (darwin), git 2.50, Python 3.13.2 via asdf.
-- `aiohttp` and `voluptuous` are importable (HA deps present locally). `ruff` is NOT installed — add to `pyproject`/dev when we set up lint.
+- **Local HA package is importable for static import checks** at `/Users/crash/.asdf/installs/python/3.13.2/lib/python3.13/site-packages/homeassistant` — **but its version (2026.2.3) is OLDER than the user's live HA (2026.9.1)**. Do NOT trust `hasattr`/imports against the local HA for *removal*; older versions lack newer symbols, newer versions remove older ones. **Always verify API symbols against the LIVE box's exact HA version** (see "Verify against the live box" below), not the local one.
+- `aiohttp` and `voluptuous` are importable locally. **`ruff` IS installed** via `python3 -m ruff` (0.16.8) — run `python3 -m ruff check` + `python3 -m ruff format --check` before committing.
 - Home Assistant ships `aiohttp` — use it for the client (do NOT pull in `requests` into the integration itself).
+- **HA API note (this build): there is NO `ConfigEntryOptionsFlow`.** Use `OptionsFlowWithConfigEntry` (present in HA 2026.8–2026.9.2), passed `config_entry` **positionally** (no `domain=` class kwarg). This was the cause of the 0.1.4 "Invalid handler specified" (an import that failed → the `powershades` config-flow handler never registered).
 
 ## PowerShades Cloud API — VERIFIED facts
 > Base: `https://api.powershades.com` (no `/api` prefix on paths). Authenticated = `Authorization: Bearer <access>`.
