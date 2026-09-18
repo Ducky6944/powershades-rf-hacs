@@ -3,39 +3,48 @@
         "step": {
             "user": {
                 "title": "PowerShades",
-                "description": "Enter your PowerShades **RF gateway** address (local, e.g. `10.0.30.239`).\n\nCloud credentials (API key **or** e-mail+password) are optional and only add **cloud groups** (absolute-position moves). Local up/down/stop does **not** need them.\n\n**Groups** (optional): one per line, `Name: 1,2,3`\n\nExample:\n```\nGreat Room: 1,2,3\nOffice: 4,5\n```",
+                "description": "Enter your PowerShades **RF gateway** address (local, e.g. `10.0.30.239`).\n\n**Travel time** = how many seconds a shade takes to move fully open to fully closed. We use it to emulate \"set to N%\", which the gateway itself can't do (it only has up/down/stop). Default is 20s — measure yours once if you want precise positions.",
                 "data": {
                     "gateway": "RF gateway address",
-                    "api_key": "Cloud API key (optional)",
-                    "email": "Cloud e-mail (optional)",
-                    "password": "Cloud password (optional)",
-                    "groups": "Groups (one per line: `Name: 1,2,3`)"
+                    "travel_time": "Full-travel time (seconds)"
                 }
             },
-            "name": {
-                "title": "Name channels",
-                "description": "Name each linked channel (**{count}** found) so it can be controlled and found by name (e.g. `FIREPLACE`, `SIDE LEFT`). Leave blank to fall back to channel numbers. You can change these later in the entry **Options**.",
-                "data": {}
+            "channel": {
+                "title": "Name channel {n} of {m}",
+                "description": "Channel **{n}** is linked.\n\n**Test it**: pick *Up* or *Down* and watch which physical shade moves, then name it (e.g. `FIREPLACE`, `SIDE LEFT`). Leave the name blank to keep using the channel number.\n\nPick *Idle* to move to the next channel without a test.",
+                "data": {
+                    "action": "Test action",
+                    "name": "Shade name (optional)"
+                }
+            },
+            "groups": {
+                "title": "Groups (optional)",
+                "description": "Optionally group channels to open / close them together.\n\nOne group per line, format `Name: 1,2,3`.\n\nExample:\n```\nGreat Room: 1,2,3\nOffice: 4,5\n```\n\nLeave blank for no groups.",
+                "data": {
+                    "groups": "Groups"
+                }
             }
         },
         "error": {
             "required": "Gateway address is required.",
-            "credential_conflict": "Use either an API key **or** e-mail+password, not both.",
             "gateway_unreachable": "Could not reach the RF gateway. Check the address / network.",
-            "cannot_connect": "Could not reach the PowerShades cloud API.",
-            "invalid_auth": "Cloud credentials are invalid.",
+            "no_shades": "Gateway is reachable but no channels report a shade linked. Link one in the gateway UI first.",
             "unknown": "Unexpected error."
         },
         "abort": {
-            "already_configured": "This gateway is already configured."
+            "already_configured": "This gateway is already configured.",
+            "no_shades": "No linked shades found."
         }
     },
     "options": {
         "step": {
             "init": {
-                "title": "Rename channels",
-                "description": "Give each linked channel a name it will be controlled by (e.g. `FIREPLACE`, `SIDE LEFT`). {count} channels linked. Leave blank to keep channel numbers.",
-                "data": {}
+                "title": "PowerShades options",
+                "description": "Update the full-travel time (used for \"set to N%\") and / or the group list (one line per group, `Name: 1,2,3`).",
+                "data": {
+                    "travel_time": "Full-travel time (seconds)",
+                    "groups": "Groups"
+                }
             }
         }
     }

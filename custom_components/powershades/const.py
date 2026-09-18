@@ -4,34 +4,20 @@ from homeassistant.const import Platform
 
 DOMAIN = "powershades"
 
-PLATFORMS = [Platform.BUTTON, Platform.COVER, Platform.SENSOR]
+PLATFORMS = [Platform.COVER, Platform.SENSOR]
 
-CONF_EMAIL = "email"
-CONF_PASSWORD = "password"
-CONF_API_KEY = "api_key"
-CONF_BASE_URL = "base_url"
 CONF_GATEWAY = "gateway"
 # Optional user-supplied channel -> name map (when names can't be resolved).
 CONF_CHANNEL_NAMES = "channel_names"
 # Optional user-defined local groups: {"<name>": [ch1, ch2, ...], ...}.
 CONF_GROUPS = "groups"
-
-# How credentials are provided (config flow) — auth mode is derived from keys present.
-AUTH_MODE_EMAIL = "email"
-AUTH_MODE_API_KEY = "api_key"
-
-DEFAULT_BASE_URL = "https://api.powershades.com"
-
-# API paths
-AUTH_JWT = "/auth/jwt/"
-AUTH_JWT_REFRESH = "/auth/jwt/refresh/"
-SHADES = "/shades/"
-SHADES_MOVE = "/shades/move/"
-GROUPS = "/groups/"
-GROUPS_MOVE = "/groups/move/"
-SCENES = "/scenes/"
-SCENES_MOVE = "/scenes/move/"
-SHADE_ATTRIBUTES = "/shadeattributes/"
+# Seconds a shade takes to travel 0->100% (full sweep). Used to approximate
+# "set to X%" by timing a down command after an initial stop.
+CONF_TRAVEL_TIME = "travel_time"
+# Diagnostic metrics the user confirmed are available on their gateway:
+# one or more of "percent", "battery", "rx", "device_id". Absent = infer at
+# setup time (any key seen as non-None in the first gateway read).
+CONF_AVAILABLE = "available"
 
 # Local RF gateway ajax vars (colon-separated 30 channels unless noted)
 GW_VAR_PERCENT = "percent"
@@ -52,3 +38,9 @@ GW_CMD_QUERY = "ajax.shtml"
 GW_CMD_UP = "up"
 GW_CMD_DOWN = "down"
 GW_CMD_STOP = "stop"
+
+# Diagnostic metric keys (values used to gate sensor creation).
+METRIC_PERCENT = "percent"
+METRIC_BATTERY = "battery"
+METRIC_RX = "rx"
+METRIC_DEVICE_ID = "device_id"

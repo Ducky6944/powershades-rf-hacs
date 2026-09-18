@@ -1,4 +1,4 @@
-"""Shared data models for the PowerShades integration.
+"""Shared data models for PowerShades.
 
 Kept in their own module so both ``client.py`` and ``coordinator.py`` can import
 the types without creating an import cycle.
@@ -13,9 +13,8 @@ from dataclasses import dataclass, field
 class GatewayChannel:
     """One RF channel on the local gateway (the primary, live state plane).
 
-    ``percent`` is the position the gateway reports (its own convention: a value
-    where fully-open and fully-closed are opposite ends); ``None`` = not
-    reporting / not linked.
+    ``percent`` is the position the gateway reports (0 = fully closed/down,
+    100 = fully open/up); ``None`` = not linked / not reporting.
     """
 
     channel: int
@@ -33,37 +32,19 @@ class GatewayChannel:
 
 
 @dataclass(frozen=True)
-class ShadeInfo:
-    """A cloud shade plus its static metadata (name-resolution only)."""
-
-    id: int
-    name: str
-    device_id: int
-    property_id: int
-    attributes: dict[str, str] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class GroupInfo:
+    """A user-defined local group: a set of channels moved together."""
+
     id: int
     name: str
     shades: tuple[int, ...]
 
 
 @dataclass(frozen=True)
-class SceneInfo:
-    id: int
-    name: str
-
-
-@dataclass(frozen=True)
 class PowerShadesData:
-    """Snapshot: local gateway channels (primary) + optional cloud name lists."""
+    """Snapshot: local gateway channels (the only state plane)."""
 
     gateway: list[GatewayChannel] = field(default_factory=list)
-    shades: list[ShadeInfo] = field(default_factory=list)  # cloud, optional
-    groups: list[GroupInfo] = field(default_factory=list)  # cloud, optional
-    scenes: list[SceneInfo] = field(default_factory=list)  # cloud, optional
 
     def channel(self, number: int) -> GatewayChannel | None:
         return next((c for c in self.gateway if c.channel == number), None)
