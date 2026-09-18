@@ -17,9 +17,9 @@ import aiohttp
 import voluptuous as vol
 from homeassistant.config_entries import (
     ConfigEntry,
-    ConfigEntryOptionsFlow,
     ConfigFlow,
     ConfigFlowResult,
+    OptionsFlowWithConfigEntry,
 )
 
 from .client import (
@@ -144,7 +144,7 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
         return PowerShadesOptionsFlow(config_entry)
 
 
-class PowerShadesOptionsFlow(ConfigEntryOptionsFlow, domain=DOMAIN):
+class PowerShadesOptionsFlow(OptionsFlowWithConfigEntry):
     """Rename linked channels (and clear) without re-adding the entry."""
 
     async def async_step_init(self, user_input: dict[str, str] | None = None) -> ConfigFlowResult:
@@ -158,7 +158,7 @@ class PowerShadesOptionsFlow(ConfigEntryOptionsFlow, domain=DOMAIN):
             else:
                 data.pop(CONF_CHANNEL_NAMES, None)
             await self.hass.config_entries.async_update_entry(self.config_entry, data=data)
-            return self.async_create_entry(title="", data=user_input)
+            return self.async_create_entry(title="", data={})
 
         coordinator = self.config_entry.runtime_data
         linked = [c.channel for c in coordinator.data.gateway if c.linked]
