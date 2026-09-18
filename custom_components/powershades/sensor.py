@@ -1,8 +1,10 @@
 """Sensor platform for PowerShades (per-channel RF diagnostics).
 
-Reports the **local gateway** live plane per linked channel: shade battery
-voltage and RF signal strength. Position is already surfaced on the cover, so
-it is not duplicated here. These are diagnostic-grade.
+Reports the **local gateway** live plane per linked channel: position (percent),
+battery voltage, RF signal strength, and the linked RF device id. All are tagged
+``DIAGNOSTIC`` on purpose — they are read-back/diagnostic values, not the thing
+you control. Position on the cover is independent and always usable regardless
+of what these read.
 """
 
 from __future__ import annotations
@@ -24,10 +26,12 @@ _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0
 
-# (key, unit) — per-channel diagnostics worth surfacing.
+# (key, unit) — per-channel diagnostics worth surfacing. ``None`` = no unit.
 SENSORS = (
+    ("percent", None),
     ("battery", UnitOfElectricPotential.VOLT),
     ("rx", "dB"),
+    ("device_id", None),
 )
 
 
@@ -59,7 +63,7 @@ class PowerShadesChannelSensor(CoordinatorEntity[PowerShadesCoordinator], Sensor
         coordinator: PowerShadesCoordinator,
         channel: int,
         key: str,
-        unit: str,
+        unit: str | None,
     ) -> None:
         super().__init__(coordinator)
         self._channel = channel
@@ -78,8 +82,12 @@ class PowerShadesChannelSensor(CoordinatorEntity[PowerShadesCoordinator], Sensor
         ch = self._channel_data()
         if ch is None:
             return None
+        if self._key == "percent":
+            return ch.percent
         if self._key == "battery":
             return ch.battery_v
         if self._key == "rx":
             return ch.rx_db
+        if self._key == "device_id":
+            return ch.device_id
         return None

@@ -3,13 +3,13 @@
         "step": {
             "user": {
                 "title": "PowerShades",
-                "description": "Enter the address of your PowerShades **RF gateway** (local, e.g. `10.0.30.239`). Cloud credentials are optional and only used to resolve shade names and absolute-position moves.",
+                "description": "Enter your PowerShades **RF gateway** address (local, e.g. `10.0.30.239`).\n\nCloud credentials (API key **or** e-mail+password) are optional and only add **cloud groups** (absolute-position moves). Local up/down/stop does **not** need them.\n\n**Groups** (optional): one per line, `Name: 1,2,3`\n\nExample:\n```\nGreat Room: 1,2,3\nOffice: 4,5\n```",
                 "data": {
                     "gateway": "RF gateway address",
-                    "base_url": "Cloud API base URL (default ok)",
-                    "api_key": "Cloud account API key (optional)",
-                    "email": "Cloud e-mail (optional, or API key)",
-                    "password": "Cloud password (optional, or API key)"
+                    "api_key": "Cloud API key (optional)",
+                    "email": "Cloud e-mail (optional)",
+                    "password": "Cloud password (optional)",
+                    "groups": "Groups (one per line: `Name: 1,2,3`)"
                 }
             },
             "name": {

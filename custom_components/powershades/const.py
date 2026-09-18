@@ -13,6 +13,8 @@ CONF_BASE_URL = "base_url"
 CONF_GATEWAY = "gateway"
 # Optional user-supplied channel -> name map (when names can't be resolved).
 CONF_CHANNEL_NAMES = "channel_names"
+# Optional user-defined local groups: {"<name>": [ch1, ch2, ...], ...}.
+CONF_GROUPS = "groups"
 
 # How credentials are provided (config flow) — auth mode is derived from keys present.
 AUTH_MODE_EMAIL = "email"

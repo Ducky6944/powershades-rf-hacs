@@ -1,9 +1,10 @@
 """Cover platform for PowerShades.
 
 Local-first: one **cover per live RF gateway channel** — the primary control +
-state plane (up/down/stop, live position/battery via sensors). When the user
-supplies cloud credentials *and* names are known, **group** covers are added so
-absolute-position moves (which only exist on the cloud) are available for groups.
+state plane (up/down/stop, live position/battery via sensors). **User groups**
+are one cover each and fan up/down/stop out to every member channel locally.
+When the user supplies cloud credentials, **cloud group** covers are added so
+absolute-position moves (which only exist on the cloud) are available for them.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up per-channel covers (primary) and optional cloud group covers."""
+    """Set up per-channel covers (primary), user groups, and optional cloud groups."""
     coordinator: PowerShadesCoordinator = entry.runtime_data
     data = coordinator.data
 
@@ -45,6 +46,8 @@ async def async_setup_entry(
     for ch in data.gateway:
         if ch.linked:
             entities.append(PowerShadesChannelCover(coordinator, ch))
+    for group in coordinator.user_groups:
+        entities.append(PowerShadesLocalGroupCover(coordinator, group))
     if coordinator.cloud_configured:
         for group in data.groups:
             entities.append(PowerShadesGroupCover(coordinator, group))
@@ -52,12 +55,25 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class PowerShadesChannelCover(CoordinatorEntity[PowerShadesCoordinator], CoverEntity):
-    """A single shade exposed through its RF gateway channel."""
+class _AssumedStateCover(CoordinatorEntity[PowerShadesCoordinator], CoverEntity):
+    """Cover whose up/down/stop are always available.
+
+    The gateway's position read-back is best-effort and can report a stale or
+    edge value (0 / 100 / -1) — or a channel may not be reporting at all. The
+    HA cover UI disables *Open* when it sees ``state == "open"`` and *Close*
+    when it sees ``state == "closed"``. Setting ``assumed_state`` (true) makes
+    the frontend keep **both** buttons — and Stop — enabled regardless of what
+    the position happens to read, which is exactly what a shade control wants.
+    """
 
     _attr_has_entity_name = True
     _attr_device_class = CoverDeviceClass.SHADE
     _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP
+    _attr_assumed_state = True
+
+
+class PowerShadesChannelCover(_AssumedStateCover):
+    """A single shade exposed through its RF gateway channel."""
 
     def __init__(self, coordinator: PowerShadesCoordinator, ch: GatewayChannel) -> None:
         super().__init__(coordinator)
@@ -154,8 +170,61 @@ class PowerShadesChannelCover(CoordinatorEntity[PowerShadesCoordinator], CoverEn
             _LOGGER.warning("Gateway command '%s' ch%s failed: %s", cmd, self._channel, err)
 
 
-class PowerShadesGroupCover(CoordinatorEntity[PowerShadesCoordinator], CoverEntity):
+class PowerShadesLocalGroupCover(_AssumedStateCover):
+    """A user-defined group of local channels (open/close/stop fan out to each)."""
+
+    def __init__(self, coordinator: PowerShadesCoordinator, group: GroupInfo) -> None:
+        super().__init__(coordinator)
+        self._group_id = group.id
+        self._name = group.name
+        self._channels = list(group.shades)
+        self._attr_unique_id = f"{DOMAIN}_{coordinator.config_entry.entry_id}_usergroup_{group.id}"
+        self._attr_device_info = coordinator.user_group_device_info(group)
+
+    @property
+    def name(self) -> str | None:
+        return self._name
+
+    @property
+    def is_closed(self) -> bool | None:
+        # Groups have no single live position report; unknown is honest.
+        return None
+
+    @property
+    def is_open(self) -> bool | None:
+        return None
+
+    @property
+    def current_cover_position(self) -> int | None:
+        return None
+
+    async def _cmd(self, kind: str) -> None:
+        client = self.coordinator.client
+        for channel in self._channels:
+            try:
+                if kind == "up":
+                    await client.gateway_up(channel)
+                elif kind == "down":
+                    await client.gateway_down(channel)
+                else:
+                    await client.gateway_stop(channel)
+            except Exception as err:  # keep going: one channel failing != all fail
+                _LOGGER.warning("Group '%s' %s on ch%s failed: %s", self._name, kind, channel, err)
+
+    async def async_open_cover(self, **kwargs: Any) -> None:
+        await self._cmd("up")
+
+    async def async_close_cover(self, **kwargs: Any) -> None:
+        await self._cmd("down")
+
+    async def async_stop_cover(self, **kwargs: Any) -> None:
+        await self._cmd("stop")
+
+
+class PowerShadesGroupCover(_AssumedStateCover):
     """A cloud group (absolute position via the cloud API)."""
+
+    _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.SET_POSITION
 
     _attr_has_entity_name = True
     _attr_device_class = CoverDeviceClass.SHADE

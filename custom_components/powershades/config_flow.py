@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 import aiohttp
 import voluptuous as vol
@@ -34,6 +35,7 @@ from .const import (
     CONF_CHANNEL_NAMES,
     CONF_EMAIL,
     CONF_GATEWAY,
+    CONF_GROUPS,
     CONF_PASSWORD,
     DEFAULT_BASE_URL,
     DOMAIN,
@@ -45,12 +47,38 @@ _LOGGER = logging.getLogger(__name__)
 USER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_GATEWAY): str,
-        vol.Optional(CONF_BASE_URL, default=DEFAULT_BASE_URL): str,
         vol.Optional(CONF_API_KEY): str,
         vol.Optional(CONF_EMAIL): str,
         vol.Optional(CONF_PASSWORD): str,
+        vol.Optional(CONF_GROUPS, default=""): str,
     }
 )
+
+
+def _parse_groups(text: str) -> dict[str, list[int]]:
+    """Parse ``"Name: 1,2,3; Other: 1,4,5"`` into ``{name: [ch, ...]}``.
+
+    Semicolons (and newlines) separate groups; the first ``:`` separates the
+    name from the comma-separated channel list. Malformed segments are skipped.
+    """
+    out: dict[str, list[int]] = {}
+    for part in re.split(r"[;\n]+", text or ""):
+        part = (part or "").strip()
+        if not part or ":" not in part:
+            continue
+        name, _, chans = part.partition(":")
+        name = name.strip()
+        if not name:
+            continue
+        channels: list[int] = []
+        for tok in re.split(r"[\s,]+", chans):
+            tok = tok.strip()
+            if tok.isdigit():
+                channels.append(int(tok))
+        if channels:
+            out[name] = channels
+    return out
+
 
 GATEWAY_VARS = ("percent", "battery", "rx", "rfdevs")
 
@@ -64,17 +92,19 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
     _linked: list[int] = []
     _base_url: str = DEFAULT_BASE_URL
     _credentials: dict[str, str] = {}
+    _groups: dict[str, list[int]] = {}
 
     # -- step 1: gateway (+ optional cloud credentials) -------------------
 
     async def async_step_user(self, user_input: dict[str, str] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             gateway = _normalize_gateway(user_input.get(CONF_GATEWAY) or "")
-            self._base_url = (user_input.get(CONF_BASE_URL) or DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL
+            self._base_url = DEFAULT_BASE_URL
             self._gateway = gateway
             api_key = (user_input.get(CONF_API_KEY) or "").strip()
             email = (user_input.get(CONF_EMAIL) or "").strip()
             password = user_input.get(CONF_PASSWORD) or ""
+            self._groups = _parse_groups(user_input.get(CONF_GROUPS) or "")
 
             self._credentials = _credential_fields(api_key, email, password)
 
@@ -130,6 +160,8 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
             }
             if names:
                 data[CONF_CHANNEL_NAMES] = {str(k): v for k, v in names.items()}
+            if self._groups:
+                data[CONF_GROUPS] = self._groups
             return self.async_create_entry(title=_title_for(self._gateway), data=data)
 
         schema = {vol.Optional(f"ch{n}"): vol.Coerce(str) for n in self._linked}

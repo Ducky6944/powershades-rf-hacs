@@ -114,6 +114,34 @@ class PowerShadesCoordinator(DataUpdateCoordinator[PowerShadesData]):
             "model": "Cloud Group",
         }
 
+    @property
+    def user_groups(self) -> list[GroupInfo]:
+        """User-defined local groups: ``{"<name>": [ch1, ch2, ...], ...}``.
+
+        ``id`` is the group's position in the (insertion-ordered) dict, which
+        is stable across restarts and unique per name+membership in practice.
+        """
+        raw = self.config_entry.data.get("groups") or {}
+        groups: list[GroupInfo] = []
+        for idx, (name, channels) in enumerate(raw.items()):
+            try:
+                chans = tuple(int(x) for x in channels)
+            except (TypeError, ValueError):
+                continue
+            if chans:
+                groups.append(GroupInfo(id=idx, name=str(name), shades=chans))
+        return groups
+
+    def user_group_device_info(self, group: GroupInfo) -> dict:
+        """Device-registry entry for a user group (one per group, local plane)."""
+        ident = (DOMAIN, f"{self.config_entry.entry_id}:usergroup:{group.id}")
+        return {
+            "identifiers": {ident},
+            "name": f"PowerShades {group.name}",
+            "manufacturer": "PowerShades",
+            "model": f"RF Group ({len(group.shades)})",
+        }
+
     def channel_device_info(self, ch: GatewayChannel) -> dict:
         """Device-registry entry for one RF gateway channel (the live plane)."""
         ident = (DOMAIN, f"{self.config_entry.entry_id}:gw:{ch.channel}")
