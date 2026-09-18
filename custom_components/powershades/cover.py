@@ -72,34 +72,33 @@ class PowerShadesChannelCover(CoordinatorEntity[PowerShadesCoordinator], CoverEn
         return self.coordinator.data.channel(self._channel)
 
     def _resolved_name(self) -> str:
-        ch = self._ch()
-        base = ch.name if ch else None
-        if not base:
-            base = self.coordinator.channel_names.get(self._channel)
-        if not base:
-            base = f"Channel {self._channel}"
-        return base
+        # The carrying device already holds the resolved name
+        # ("PowerShades <label>"), so the cover stays a short, stable role.
+        return "Shade"
 
     @property
     def name(self) -> str | None:
         return self._resolved_name()
 
     # -- state (from the live gateway plane) --------------------------------
-    # The base CoverEntity.state resolves from is_opening/is_closing/is_closed,
-    # so provide those (current_cover_position is an optional extra alongside).
+    # Gateway percent (VERIFIED from 0=closed / 100=open on dashboard and
+    # gateway's own lib.js):  = open, 0 = closed.
+    # HA Cover semantics:    current_cover_position 0=closed, 100=open.
+    # They are 1:1, so no inversion is needed.
 
     @property
     def is_closed(self) -> bool | None:
         ch = self._ch()
         if ch is None or ch.percent is None:
             return None
-        # gateway/cloud percent: 0 = fully open, 100 = fully closed.
-        return ch.percent >= 99
+        return ch.percent < 2
 
     @property
     def is_open(self) -> bool | None:
-        closed = self.is_closed
-        return None if closed is None else not closed
+        ch = self._ch()
+        if ch is None or ch.percent is None:
+            return None
+        return ch.percent > 98
 
     @property
     def is_opening(self) -> bool:
@@ -114,8 +113,7 @@ class PowerShadesChannelCover(CoordinatorEntity[PowerShadesCoordinator], CoverEn
         ch = self._ch()
         if ch is None or ch.percent is None:
             return None
-        # gateway percent: 0=open, 100=closed. HA position: 0=closed, 100=open.
-        return 100 - ch.percent
+        return ch.percent
 
     @property
     def available(self) -> bool:
@@ -187,10 +185,12 @@ class PowerShadesGroupCover(CoordinatorEntity[PowerShadesCoordinator], CoverEnti
         return None
 
     async def async_open_cover(self, **kwargs: Any) -> None:
-        await self._move(0)
+        # HA: open = position 100. Cloud: open = percentage 0. map cloud = 100 - ha.
+        await self._move(100)
 
     async def async_close_cover(self, **kwargs: Any) -> None:
-        await self._move(100)
+        # HA: close = position 0. Cloud: close = percentage 100.
+        await self._move(0)
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         await self._move(kwargs[ATTR_POSITION])

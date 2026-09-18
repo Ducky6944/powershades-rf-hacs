@@ -25,6 +25,10 @@ venv/
 # Session transcripts
 /transcripts/
 
+# Local debug helpers (token holds a HA long-lived secret; do not commit)
+.ha_token
+.ha_ssh
+
 # Live-captured dashboard debug dumps (contain account secrets — do not commit)
 references/dash_*.html
 references/dash_*.js

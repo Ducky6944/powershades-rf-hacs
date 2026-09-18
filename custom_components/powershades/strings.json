@@ -14,7 +14,7 @@
             },
             "name": {
                 "title": "Name channels",
-                "description": "No cloud credentials given, so names are unknown. Optionally name each linked channel ({count} found) to control them by name. Leave blank to use channel numbers.",
+                "description": "Name each linked channel (**{count}** found) so it can be controlled and found by name (e.g. `FIREPLACE`, `SIDE LEFT`). Leave blank to fall back to channel numbers. You can change these later in the entry **Options**.",
                 "data": {}
             }
         },
@@ -28,6 +28,15 @@
         },
         "abort": {
             "already_configured": "This gateway is already configured."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Rename channels",
+                "description": "Give each linked channel a name it will be controlled by (e.g. `FIREPLACE`, `SIDE LEFT`). {count} channels linked. Leave blank to keep channel numbers.",
+                "data": {}
+            }
         }
     }
 }

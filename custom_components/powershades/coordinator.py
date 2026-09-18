@@ -96,22 +96,28 @@ class PowerShadesCoordinator(DataUpdateCoordinator[PowerShadesData]):
         raw = self.config_entry.data.get("channel_names") or {}
         return {int(k): str(v) for k, v in raw.items() if str(v)}
 
+    def channel_label(self, ch: GatewayChannel) -> str:
+        """Human name for a channel: gateway name -> user override -> number."""
+        base = (ch.name if ch.name else None) or self.channel_names.get(ch.channel)
+        if not base:
+            base = f"Channel {ch.channel}"
+        return base
+
     @property
     def device_info(self) -> dict:
         """Shared device-registry group for the account (cloud-only entities)."""
+        host = self.config_entry.title or "account"
         return {
             "identifiers": {(DOMAIN, self.config_entry.entry_id)},
-            "name": "PowerShades Account",
+            "name": f"PowerShades ({host})",
             "manufacturer": "PowerShades",
-            "model": "Cloud",
+            "model": "Cloud Group",
         }
 
     def channel_device_info(self, ch: GatewayChannel) -> dict:
         """Device-registry entry for one RF gateway channel (the live plane)."""
         ident = (DOMAIN, f"{self.config_entry.entry_id}:gw:{ch.channel}")
-        name = f"PowerShades Gateway Ch {ch.channel}"
-        if ch.name:
-            name = f"{ch.name} (gateway ch {ch.channel})"
+        name = f"PowerShades {self.channel_label(ch)}"
         info: dict = {
             "identifiers": {ident},
             "name": name,

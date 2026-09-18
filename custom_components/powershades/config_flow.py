@@ -1,10 +1,11 @@
-"""Config flow for PowerShades (local-first).
+"""Config + options flow for PowerShades (local-first).
 
 Primary input is the **local RF gateway** address (the state + control plane).
-Cloud credentials are *optional* and used only to resolve shade names and drive
-absolute-position moves; the user supplies either an **account API key** or
-**email + password**. If neither is supplied, the flow offers a manual
-per-channel naming step so unlinked channels still get usable names.
+Because the gateway reports channels positionally (no name / device-id bridge to
+the cloud), each linked channel is optionally **named by the user** during setup
+(again via the options flow). Cloud credentials (API key or e-mail+password) are
+optional and only add **group** covers (absolute-position moves); they do *not*
+auto-name the per-channel covers.
 """
 
 from __future__ import annotations
@@ -14,7 +15,12 @@ import logging
 
 import aiohttp
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigEntryOptionsFlow,
+    ConfigFlow,
+    ConfigFlowResult,
+)
 
 from .client import (
     PowerShadesClient,
@@ -57,11 +63,11 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
     _gateway: str | None = None
     _linked: list[int] = []
     _base_url: str = DEFAULT_BASE_URL
+    _credentials: dict[str, str] = {}
 
     # -- step 1: gateway (+ optional cloud credentials) -------------------
 
     async def async_step_user(self, user_input: dict[str, str] | None = None) -> ConfigFlowResult:
-        errors = {}
         if user_input is not None:
             gateway = _normalize_gateway(user_input.get(CONF_GATEWAY) or "")
             self._base_url = (user_input.get(CONF_BASE_URL) or DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL
@@ -70,7 +76,9 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
             email = (user_input.get(CONF_EMAIL) or "").strip()
             password = user_input.get(CONF_PASSWORD) or ""
 
-            creds = bool(api_key) or (bool(email) and bool(password))
+            self._credentials = _credential_fields(api_key, email, password)
+
+            errors: dict[str, str] = {}
             if api_key and (email or password):
                 errors["base"] = "credential_conflict"
                 return self._show_user(errors)
@@ -82,8 +90,8 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
                 async with aiohttp.ClientSession() as session:
                     try:
                         self._linked = await _probe_gateway(session, gateway)
-                        if creds:
-                            await _validate_cloud(session, api_key, email, password, self._base_url)
+                        if self._credentials:
+                            await _validate_cloud(session, api_key or None, email or None, password, self._base_url)
                     except PowerShadesUnavailable as err:
                         _LOGGER.debug("Gateway unreachable: %s", err)
                         errors["base"] = "gateway_unreachable"
@@ -93,37 +101,33 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
                     except Exception:
                         _LOGGER.exception("Unexpected config-flow error")
                         errors["base"] = "unknown"
-
-            if not gateway:
+            else:
                 errors["base"] = "required"
+
             if errors:
                 return self._show_user(errors)
 
-            if creds:
-                return self.async_create_entry(
-                    title=_title_for(gateway),
-                    data={
-                        CONF_GATEWAY: gateway,
-                        CONF_BASE_URL: self._base_url,
-                        **_credential_fields(api_key, email, password),
-                    },
-                )
+            # Always let the user name the linked channels (there is no local
+            # name source); this is the only way to get readable entity names.
             return await self.async_step_name(None)
 
-        return self._show_user(errors)
+        return self._show_user({})
 
     def _show_user(self, errors):
         return self.async_show_form(step_id="user", data_schema=USER_SCHEMA, errors=errors)
 
-    # -- step 2: manual channel naming (when no cloud credentials) -------
+    # -- step 2: name each linked channel ---------------------------------
 
     async def async_step_name(self, user_input: dict[str, str] | None = None) -> ConfigFlowResult:
-        """Optionally name each linked channel (no names available locally)."""
         if user_input is not None:
             names = {
                 int(key[2:]): str(value).strip() for key, value in user_input.items() if key.startswith("ch") and value
             }
-            data: dict = {CONF_GATEWAY: self._gateway or "", CONF_BASE_URL: self._base_url}
+            data: dict = {
+                CONF_GATEWAY: self._gateway or "",
+                CONF_BASE_URL: self._base_url,
+                **self._credentials,
+            }
             if names:
                 data[CONF_CHANNEL_NAMES] = {str(k): v for k, v in names.items()}
             return self.async_create_entry(title=_title_for(self._gateway), data=data)
@@ -133,6 +137,36 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="name",
             data_schema=vol.Schema(schema),
             description_placeholders={"count": len(self._linked), "gateway": self._gateway or ""},
+        )
+
+    @staticmethod
+    def async_get_options_flow(config_entry: ConfigEntry) -> PowerShadesOptionsFlow:
+        return PowerShadesOptionsFlow(config_entry)
+
+
+class PowerShadesOptionsFlow(ConfigEntryOptionsFlow, domain=DOMAIN):
+    """Rename linked channels (and clear) without re-adding the entry."""
+
+    async def async_step_init(self, user_input: dict[str, str] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            names = {
+                int(key[2:]): str(value).strip() for key, value in user_input.items() if key.startswith("ch") and value
+            }
+            data = dict(self.config_entry.data)
+            if names:
+                data[CONF_CHANNEL_NAMES] = {str(k): v for k, v in names.items()}
+            else:
+                data.pop(CONF_CHANNEL_NAMES, None)
+            await self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+            return self.async_create_entry(title="", data=user_input)
+
+        coordinator = self.config_entry.runtime_data
+        linked = [c.channel for c in coordinator.data.gateway if c.linked]
+        schema = {vol.Optional(f"ch{n}"): vol.Coerce(str) for n in linked}
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(schema),
+            description_placeholders={"count": len(linked)},
         )
 
 
@@ -151,13 +185,14 @@ def _gateway_key(gateway: str) -> str:
 def _credential_fields(api_key: str, email: str, password: str) -> dict[str, str]:
     if api_key:
         return {CONF_API_KEY: api_key}
-    return {CONF_EMAIL: email, CONF_PASSWORD: password}
+    if email and password:
+        return {CONF_EMAIL: email, CONF_PASSWORD: password}
+    return {}
 
 
 def _title_for(gateway: str | None) -> str:
-    if not gateway:
-        return "PowerShades"
-    return gateway.split("://", 1)[-1].split("/", 1)[0].rstrip(":")
+    host = (gateway or "").split("://", 1)[-1].split("/", 1)[0]
+    return f"PowerShades {host}" if host else "PowerShades"
 
 
 async def _probe_gateway(session: aiohttp.ClientSession, gateway: str) -> list[int]:
