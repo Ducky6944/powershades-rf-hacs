@@ -1,7 +1,7 @@
 {
   "domain": "powershades",
   "name": "PowerShades",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "config_flow": true,
   "documentation": "https://github.com/Ducky6944/powershades-rf-hacs",
   "issue_tracker": "https://github.com/Ducky6944/powershades-rf-hacs/issues",

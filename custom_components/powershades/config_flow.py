@@ -2,14 +2,14 @@
 
 Setup is a small, guided flow:
 
-1. **gateway + travel time** — the gateway address, and how long a shade takes
-   for a full 0→100% sweep (used to emulate "set to N%", which the gateway
-   itself can't do).
-2. **identify each channel** — for every linked channel the user sees a name
-   field plus a "test" dropdown (idle / open / close). Tapping "open" or
-   "close" physically moves that shade so the user can match it to a real
-   window, name it, and continue to the next channel.
-3. **groups (optional)** — one line each, ``Name: 1,2,3``.
+1. **gateway + base travel time** — the gateway address, and a *base* full-
+   0→100% sweep time (used to emulate "set to N%", which the gateway can't do
+   on its own). Each shade can override this in the next step.
+2. **identify each channel** — for every linked channel the user picks
+   *up* or *down* to nudge that physical shade and spot it. They can do this as
+   many times as needed (nothing advances until they tick "move on"), then
+   optionally name the shade and set its own travel time.
+3. **groups (optional)** — one per line in a textarea, ``Name: 1,2,3``.
 4. **done**.
 
 No cloud. No email / password / API key. The gateway is the integration.
@@ -29,6 +29,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlowWithConfigEntry,
 )
+from homeassistant.helpers import config_validation as cv, selector
 
 # Reuse the parser + client from the runtime so both sides agree on shapes.
 from .client import PowerShadesClient, PowerShadesUnavailable, _parse_gateway
@@ -38,6 +39,7 @@ from .const import (
     CONF_GATEWAY,
     CONF_GROUPS,
     CONF_TRAVEL_TIME,
+    CONF_TRAVEL_TIMES,
     DOMAIN,
     GW_AJAX_PATH,
 )
@@ -59,16 +61,22 @@ USER_SCHEMA = vol.Schema(
     }
 )
 
+# Per-channel identify step. ``action`` nudge (up/down) fires on submit (blank =
+# no movement, just save the name/travel). ``advance`` must be ticked to move
+# on, so the user can nudge as many times as needed before committing.
 CHANNEL_SCHEMA = vol.Schema(
     {
-        vol.Required("action", default="idle"): vol.In(["idle", "up", "down"]),
+        vol.Optional("action"): vol.In(["up", "down"]),
         vol.Optional("name", default=""): vol.Coerce(str),
+        vol.Optional("travel_time", default=""): vol.Coerce(str),
+        vol.Required("advance", default=False): cv.boolean,
     }
 )
 
+# Groups as a multiline textarea (one ``Name: 1,2,3`` per line).
 GROUPS_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_GROUPS, default=""): vol.Coerce(str),
+        vol.Optional(CONF_GROUPS, default=""): selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
     }
 )
 
@@ -91,6 +99,25 @@ def _parse_groups(text: str) -> dict[str, list[int]]:
                 channels.append(int(tok))
         if channels:
             out[name] = channels
+    return out
+
+
+def _parse_travel_times(text: str) -> dict[int, float]:
+    """Parse per-channel travel-time overrides (``"12=25``" lines) into
+    ``{channel: seconds}``. Malformed lines are ignored."""
+    out: dict[int, float] = {}
+    for part in re.split(r"[;\n]+", text or ""):
+        part = (part or "").strip()
+        if not part or "=" not in part:
+            continue
+        ch, _, secs = part.partition("=")
+        try:
+            ch_i = int(ch.strip())
+            s = float(secs.strip())
+        except ValueError:
+            continue
+        if ch_i > 0 and s > 0:
+            out[ch_i] = s
     return out
 
 
@@ -120,6 +147,7 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
     _travel_time: float = DEFAULT_TRAVEL_TIME
     _linked: list[int] = []
     _names: dict[int, str] = {}
+    _travel_times: dict[int, float] = {}
     _available: set[str] = set()
     _i: int = 0  # 1-based index into self._linked
 
@@ -132,6 +160,7 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
             self._gateway = gateway
             self._linked = []
             self._names = {}
+            self._travel_times = {}
             self._available = set()
             self._i = 0
 
@@ -156,11 +185,7 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_show_form(step_id="user", data_schema=USER_SCHEMA, errors={"base": "no_shades"})
 
             self._i = 1
-            return self.async_show_form(
-                step_id="channel",
-                data_schema=CHANNEL_SCHEMA,
-                description_placeholders={"n": self._i, "m": len(self._linked)},
-            )
+            return self._show_channel()
 
         return self.async_show_form(step_id="user", data_schema=USER_SCHEMA)
 
@@ -190,7 +215,7 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._available.add("device_id")
         self._linked.sort()
 
-    # -- Step N: per-channel name + test ----------------------------------
+    # -- Step N: per-channel identify ---------------------------------------
 
     async def async_step_channel(self, user_input: dict | None = None) -> ConfigFlowResult:
         n = self._linked[self._i - 1] if 1 <= self._i <= len(self._linked) else None
@@ -198,11 +223,8 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="no_shades")
 
         if user_input is not None:
-            action = user_input.get("action", "idle")
-            name = str(user_input.get("name") or "").strip()
-            if name:
-                self._names[n] = name
-
+            # 1. Fire the nudge (up/down) if the user picked one. Blank = no movement.
+            action = user_input.get("action")
             if self._gateway and action in ("up", "down"):
                 async with aiohttp.ClientSession() as session:
                     client = PowerShadesClient(session, gateway=self._gateway)
@@ -214,19 +236,35 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
                     except Exception as err:
                         _LOGGER.warning("Test %s on ch%s failed: %s", action, n, err)
 
-            self._i += 1
-            if self._i <= len(self._linked):
-                return self.async_show_form(
-                    step_id="channel",
-                    data_schema=CHANNEL_SCHEMA,
-                    description_placeholders={"n": self._i, "m": len(self._linked)},
-                )
-            return await self.async_step_groups()
+            # 2. Capture the (optional) name and (optional) travel-time override.
+            name = str(user_input.get("name") or "").strip()
+            if name:
+                self._names[n] = name
+            raw_tt = user_input.get("travel_time")
+            try:
+                tt = float(raw_tt)
+            except (TypeError, ValueError):
+                tt = None
+            if tt and tt > 0:
+                self._travel_times[n] = tt
 
+            # 3. Advance only when the user says they're done matching this shade.
+            if user_input.get("advance"):
+                self._i += 1
+                if self._i <= len(self._linked):
+                    return self._show_channel()
+                return await self.async_step_groups()
+
+            # Otherwise stay on this channel (let them keep nudging to spot it).
+            return self._show_channel()
+
+        return self._show_channel()
+
+    def _show_channel(self) -> ConfigFlowResult:
         return self.async_show_form(
             step_id="channel",
             data_schema=CHANNEL_SCHEMA,
-            description_placeholders={"n": max(self._i, 1), "m": len(self._linked)},
+            description_placeholders={"n": self._i, "m": len(self._linked)},
         )
 
     # -- Final step: optional groups ---------------------------------------
@@ -240,6 +278,8 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_CHANNEL_NAMES: {str(k): v for k, v in self._names.items()},
                 CONF_AVAILABLE: sorted(self._available),
             }
+            if self._travel_times:
+                data[CONF_TRAVEL_TIMES] = {str(k): v for k, v in self._travel_times.items()}
             if groups:
                 data[CONF_GROUPS] = groups
             return self.async_create_entry(title=_title_for(self._gateway), data=data)
@@ -255,29 +295,88 @@ class PowerShadesConfigFlow(ConfigFlow, domain=DOMAIN):
         return PowerShadesOptionsFlow(config_entry)
 
 
+OPTIONS_MULTILINE = selector.TextSelector(selector.TextSelectorConfig(multiline=True))
+
+
+def _current_names(data: dict) -> str:
+    names = data.get(CONF_CHANNEL_NAMES) or {}
+    return "\n".join(f"{ch}={name}" for ch, name in sorted((int(k), v) for k, v in names.items()))
+
+
+def _current_travel_times(data: dict) -> str:
+    tts = data.get(CONF_TRAVEL_TIMES) or {}
+    return "\n".join(f"{ch}={tt}" for ch, tt in sorted((int(k), v) for k, v in tts.items()))
+
+
+def _current_groups(data: dict) -> str:
+    groups = data.get(CONF_GROUPS) or {}
+    return "\n".join(f"{name}: {','.join(str(c) for c in chans)}" for name, chans in groups.items())
+
+
 class PowerShadesOptionsFlow(OptionsFlowWithConfigEntry):
-    """Edit names / groups / travel time without re-adding the entry."""
+    """Edit base travel time, per-channel travel times, names, and groups —
+    all without re-adding the entry. Every field is optional; blank = unchanged."""
 
     async def async_step_init(self, user_input: dict | None = None) -> ConfigFlowResult:
         current = self.config_entry.data
         if user_input is not None:
             data = dict(current)
-            tt = user_input.get(CONF_TRAVEL_TIME)
-            if tt:
-                data[CONF_TRAVEL_TIME] = float(tt)
+            base = user_input.get(CONF_TRAVEL_TIME)
+            try:
+                if float(base) > 0:
+                    data[CONF_TRAVEL_TIME] = float(base)
+            except (TypeError, ValueError):
+                pass
+
             groups = _parse_groups(user_input.get(CONF_GROUPS) or "")
             if groups:
                 data[CONF_GROUPS] = groups
             else:
                 data.pop(CONF_GROUPS, None)
+
+            if user_input.get(CONF_TRAVEL_TIMES) is not None:
+                tts = _parse_travel_times(user_input.get(CONF_TRAVEL_TIMES) or "")
+                if tts:
+                    data[CONF_TRAVEL_TIMES] = {str(k): v for k, v in tts.items()}
+                else:
+                    data.pop(CONF_TRAVEL_TIMES, None)
+
+            if user_input.get("channel_names") is not None:
+                names = self._parse_names(user_input.get("channel_names") or "")
+                if names:
+                    data[CONF_CHANNEL_NAMES] = {str(k): v for k, v in names.items()}
+                else:
+                    data.pop(CONF_CHANNEL_NAMES, None)
+
             await self.hass.config_entries.async_update_entry(self.config_entry, data=data)
             return self.async_create_entry(title="", data={})
 
-        schema_opts = {
-            vol.Required(
-                CONF_TRAVEL_TIME,
-                default=float(current.get(CONF_TRAVEL_TIME) or DEFAULT_TRAVEL_TIME),
-            ): vol.Coerce(float),
-            vol.Optional(CONF_GROUPS, default=""): vol.Coerce(str),
-        }
-        return self.async_show_form(step_id="init", data_schema=vol.Schema(schema_opts))
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_TRAVEL_TIME,
+                    default=str(float(current.get(CONF_TRAVEL_TIME) or DEFAULT_TRAVEL_TIME)),
+                ): vol.Coerce(str),
+                vol.Optional(CONF_GROUPS, default=_current_groups(current)): OPTIONS_MULTILINE,
+                vol.Optional(CONF_TRAVEL_TIMES, default=_current_travel_times(current)): OPTIONS_MULTILINE,
+                vol.Optional("channel_names", default=_current_names(current)): OPTIONS_MULTILINE,
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)
+
+    @staticmethod
+    def _parse_names(text: str) -> dict[int, str]:
+        out: dict[int, str] = {}
+        for part in re.split(r"[;\n]+", text or ""):
+            part = (part or "").strip()
+            if not part or "=" not in part:
+                continue
+            ch, _, name = part.partition("=")
+            name = name.strip()
+            try:
+                ch_i = int(ch.strip())
+            except ValueError:
+                continue
+            if ch_i > 0 and name:
+                out[ch_i] = name
+        return out

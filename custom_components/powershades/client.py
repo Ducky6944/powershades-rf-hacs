@@ -67,7 +67,7 @@ class PowerShadesClient:
         url = f"{self._gateway}{GW_AJAX_PATH}?var=" + ",".join(variables)
         try:
             text = await self._get(url)
-            return self._parse_gateway(json.loads(text))
+            return _parse_gateway(json.loads(text))
         except (aiohttp.ClientError, ValueError, TimeoutError) as err:
             raise PowerShadesUnavailable(str(err)) from err
 

@@ -142,7 +142,8 @@ class PowerShadesChannelCover(_AssumedStateCover):
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         target = int(kwargs[ATTR_POSITION])
-        await move_to_position(self.coordinator.client, self._channel, target, self.coordinator.travel_time)
+        travel = self.coordinator.travel_time_for(self._channel)
+        await move_to_position(self.coordinator.client, self._channel, target, travel)
         self.coordinator.record_estimate(self._channel, target)
 
 

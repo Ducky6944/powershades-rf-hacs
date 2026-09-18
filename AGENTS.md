@@ -74,11 +74,11 @@ The shade system has a **local RF Gateway** (lwIP web server) at `http://192.0.2
 ### Commands (GET, `200` w/ empty body)
 - `ajax.shtml?up=<ch>` / `down=<ch>` / `stop=<ch>` — **local has NO absolute percent set**; only up/down/stop.
 - `?pair=<ch>` → pairing mode, `?link=<ch>` → link feedback, `?p2=<ch>`.
-- So **absolute position control (open/close/percent) must go through the CLOUD API** (`/shades/move/`), while the **gateway gives live position/battery/feedback** for readback once a device reports.
+- So **absolute "set to N%" is emulated locally** in `_movement.py` (see strategy below), while the **gateway gives live position/battery/feedback** for readback once a device reports.
 
 ### Decided integration strategy (REVISED — local-first, **cloud dropped** as of 0.1.7)
 - **Everything local. No cloud.** Cloud was dropped because its group control "completely not functional" and it added config burden with no payoff. The gateway is the single state+control plane.
-- **Control plane = local gateway:** `up`/`down`/`stop` per channel. **Absolute "set to N%" is emulated** (gateway has no percent-set) — a timed routine in `_movement.py`: `stop` → `up` for `travel_time` (→ known fully-open 100%) → `down` for `(100-N) * travel_time / 100` s → `stop`. **`travel_time` (full 0→100 sweep, seconds) is a user-config field** (editable any time via options flow) — accuracy depends on it.
+- **Control plane = local gateway:** `up`/`down`/`stop` per channel. **Absolute "set to N%" is emulated** (gateway has no percent-set) — a timed routine in `_movement.py`: `stop` → `up` for `travel_time` (→ known fully-open 100%) → `down` for `(100-N) * travel_time / 100` s → `stop`. **`travel_time` (full 0→100 sweep, seconds) is a user-config field** — a **base** value *plus* **per-channel overrides** (`travel_times`, keyed by channel) since taller shades are slower. Set per shade during the identify step; editable any time via options flow. Cover uses `coordinator.travel_time_for(channel)`. Accuracy depends on it.
 - **State plane = local gateway:** `percent`/`battery`/`rx`/`rfdevs` per channel. All diagnostic (DIAGNOSTIC entity category); the gateway read is **flaky**, so a per-channel **estimated-position** diagnostic is also emitted = the position we *intended* last.
 - **Percent direction (gateway, user-verified):** `0 = fully closed/down`, `100 = fully open/up`. HA cover: `0 = closed`, `100 = open` → **identity mapping** (`current_cover_position = percent`).
 - **Buttons always on:** every cover sets `_attr_assumed_state = True` so the HA UI never greys Open/Close due to a bogus/absent reported position (verified: frontend `canOpen`/`canClose` are forced true when `assumed_state === true`).
@@ -89,28 +89,31 @@ The shade system has a **local RF Gateway** (lwIP web server) at `http://192.0.2
 3. Does channel N on the gateway map 1:1 to a specific cloud shade? (No explicit channel field in `/shades/` or `/shadeattributes/`. Resolve by pairing one channel and observing which shade's `percent` changes.)
 
 ## Good practices for the HACS integration
-- Modern async: `aiohttp.ClientSession` via `httpx`? No — use `aiohttp` (HA-native). Store session on the config entry; close in `async_unload_entry`.
-- `ConfigEntryAuth` + `OAuthTokenProvider`-style token refresh is overkill; use a small auth wrapper that logs in with email/password, refreshes on 401, and re-logs on refresh failure. Store **only** email+password + base_url in the config entry data (secrets) — re-mint JWTs at runtime.
-- `DataUpdateCoordinator` to fetch `/shades/` + `/shadeattributes/` + `/groups/` and hand out covers.
-- Config flow: validate credentials in the flow (call `/auth/jwt/`), handle unique_id per credential.
-- Cover platform maps to `cover` entities; scenes → `scene`/`button`; groups → `cover` too.
-- HACS: needs `manifest.json` + `custom_components/powershades/`. For HACS listing the repo should be a standalone repo (this one) with proper `name`, `domain` powershades.
+- Modern async: `aiohttp.ClientSession` (HA-native, don't pull in `requests`).
+- `DataUpdateCoordinator` to poll the gateway every 3 s and hand out covers/sensors. Keep last-good read so a flaky read doesn't blank the UI.
+- Config flow: probe the gateway to learn linked channels; `unique_id = gateway host:port`.
+- **`TextSelector(selector.TextSelectorConfig(multiline=True))`** renders a multi-line textarea in the HA UI — use it for "one line per item" inputs (groups, per-channel travel times, names). Plain `vol.Coerce(str)` renders a single-line box. Verified available in the local HA build.
+- **Gotcha (0.1.7 crash):** a helper defined at **module level** must be called as a bare function, NOT `self.method(...)`. `client.py` had `self._parse_gateway(...)` while `_parse_gateway` was a module fn → `AttributeError` on every refresh, which looked like "setup failed". Fixed in 0.1.8.
+- **`vol.Coerce(float)` raises on `""`.** For optional numeric fields in a schema, use `vol.Coerce(str)` + parse in the handler (blank stays blank).
+- HACS: needs `manifest.json` + `custom_components/powershades/`; standalone repo with `name`, `domain` = powershades.
 
-## What's built (as of 2026-09-18 — v0.1.7, local-first, cloud dropped)
+## What's built (as of 2026-09-18 — v0.1.8, local-first, cloud dropped)
 Structure at `custom_components/powershades/` (all `aiohttp`, lint clean under ruff 0.16.8):
-- **client.py** — local gateway only: `fetch_gateway(vars)`, `gateway_up/down/stop(ch)`. `_parse_gateway(raw)` → list of per-channel dicts. No cloud.
+- **client.py** — local gateway only: `fetch_gateway(vars)`, `gateway_up/down/stop(ch)`. `_parse_gateway(raw)` (module fn) → list of per-channel dicts. No cloud.
 - **_movement.py** — timed routines: `open_channel`/`close_channel`/`stop`, and `set_position(client, ch, target, travel_time)` = stop → up(travel) → down(`(100-target)*travel/100`) → stop.
-- **config_flow.py** — **Step 1** gateway + travel_time → **Step 2** per linked channel: pick Up/Down (physically moves the shade so the user can see which one it is) + optional name → **Step 3** optional groups (`Name: 1,2,3`) → done. `unique_id = gateway host:port`. Also an options flow (travel_time + groups).
-- **coordinator.py** — `DataUpdateCoordinator`, polls gateway every **3 s**; keeps last-good channels; exposes `travel_time`, `record_estimate/estimate` (per-channel intended position), `user_groups`, `available_metrics`, `channel_device_info`, `user_group_device_info`.
-- **cover.py** — one cover per linked channel (open/close/stop + **SET_POSITION via `_movement.set_position`**) + one per user group (open/close/stop fan-out). All set `assumed_state=True`. Identity percent mapping; `available` requires the channel linked.
-- **sensor.py** — per linked channel, **DIAGNOSTIC**, gated by `available_metrics`: percent, battery (V), rx (dB), device_id, plus an `estimated` position sensor (off by default).
+- **config_flow.py** — **Step 1** gateway + *base* travel_time → **Step 2** per linked channel: pick Up/Down to **nudge** (physically moves; can repeat as many times as needed — nothing advances until you tick "move on") + optional name + optional **per-channel travel time** → **Step 3** optional groups (multiline textarea, `Name: 1,2,3` per line) → done. `unique_id = gateway host:port`. Also an options flow (base travel_time + per-channel travel times + names + groups, all multiline, all optional).
+- **coordinator.py** — `DataUpdateCoordinator`, polls gateway every **3 s**; keeps last-good channels; exposes `travel_time` (base), `travel_time_for(channel)` (per-shade override → else base), `record_estimate/estimate`, `user_groups`, `available_metrics`, device-info helpers.
+- **cover.py** — one cover per linked channel (open/close/stop + **SET_POSITION via `_movement.set_position`**, using `travel_time_for(channel)`) + one per user group (open/close/stop fan-out). All set `assumed_state=True`. Identity percent mapping; `available` requires the channel linked.
+- **sensor.py** — per linked channel, **DIAGNOSTIC**, gated by `available_metrics`: percent, battery (V), rx (dB), device_id, plus an `estimated` position sensor.
 - Lint clean: `python3 -m ruff check` + `ruff format --check` pass.
 
-**Verified live (0.1.5/0.1.6 test rounds):** integration now lists under Settings → Devices & Services → Integrations (manifest `integration_type: hub` fixed the missing entry); up/down/stop always enabled (`assumed_state`); groups + naming work locally; the `set_position` timing routine unit-tested (target 40, 20 s travel → up 20 s then down 12 s).
+**0.1.8 (this) fixes 0.1.7's 4 reported issues:** (1) per-shade travel times; (2) identify loop no longer auto-advances + up/down re-issuable + name field surfaced; (3) groups = multiline textarea; (4) **the 0.1.7 crash** — `client.py` called `self._parse_gateway(...)` but it's a module fn → fixed to a bare call (this was why "setup failed" and no state ever loaded).
+
+**Verified live (0.1.5/0.1.6 test rounds):** integration now lists under Settings → Devices & Services → Integrations (manifest `integration_type: hub` fixed the missing entry); up/down/stop always enabled (`assumed_state`); the `set_position` timing routine unit-tested (target 40, 20 s travel → up 20 s then down 12 s).
 
 ## Still to do (incremental, one commit each)
-1. **Confirm in the real HA box (0.1.7):** full setup flow (name-by-testing), set_position physically lands near the requested %, group fan-out, and the 3 s poll feels responsive. Re-add a channel test loop here if the gateway names are blank.
-2. **`travel_time` accuracy** — it's a user-supplied guess; consider auto-measuring it during setup (drive up from known-down, time it) if the gateway reports `percent`.
-3. **Tests** — `tests/` with pytest fixtures (mocked client) for `_parse_gateway`, the `set_position` timing sequence, and group parsing. No live network in CI.
+1. **Confirm in the real HA box (0.1.8):** HACS update → restart → re-run setup (identify loop: nudge until shaded window matches, name it, set its travel time), then set_position lands near the requested % **per shade**, group fan-out, and the 3 s poll feels responsive. Confirm no more `AttributeError` in the log.
+2. **`travel_time` accuracy** — it's a user-supplied guess (now per-shade); consider auto-measuring it during setup (drive up from known-down, time it) if the gateway reports `percent`.
+3. **Tests** — `tests/` with pytest fixtures (mocked client) for `_parse_gateway`, the `set_position` timing sequence, and group/travel-time parsing. No live network in CI.
 4. **Icon** — no `icons.png` currently; add real PowerShades branding before HACS listing.
 5. **HACS listing** — `integration_type: hub`; request listing once install + tests are green.

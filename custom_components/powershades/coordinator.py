@@ -16,7 +16,7 @@ from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .client import PowerShadesClient, PowerShadesError
-from .const import CONF_GATEWAY, CONF_TRAVEL_TIME, DOMAIN, GW_VARIABLES
+from .const import CONF_GATEWAY, CONF_TRAVEL_TIME, CONF_TRAVEL_TIMES, DOMAIN, GW_VARIABLES
 from .types import GatewayChannel, GroupInfo, PowerShadesData
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,7 +54,6 @@ class PowerShadesCoordinator(DataUpdateCoordinator[PowerShadesData]):
         self._session = aiohttp_client.async_create_clientsession(hass)
         data = entry.data
         self._client = PowerShadesClient(self._session, gateway=data.get(CONF_GATEWAY))
-        self._travel_time = float(data.get(CONF_TRAVEL_TIME) or DEFAULT_TRAVEL_TIME)
         self._last_gateway: list[GatewayChannel] | None = None
         # Per-channel "estimated position" — what we think the shade is at
         # after our last command; overrides only when the gateway reports.
@@ -72,8 +71,26 @@ class PowerShadesCoordinator(DataUpdateCoordinator[PowerShadesData]):
 
     @property
     def travel_time(self) -> float:
-        """Seconds a shade takes for a full 0->100% sweep (user-tunable)."""
+        """Base seconds a shade takes for a full 0->100% sweep (user-tunable)."""
         return float(self.config_entry.data.get(CONF_TRAVEL_TIME) or DEFAULT_TRAVEL_TIME)
+
+    def travel_time_for(self, channel: int) -> float:
+        """Travel time for one channel — per-shade override when set, else base.
+
+        Different shades move at different speeds (height / load differ), so
+        ``set to N%`` accuracy depends on each shade's own sweep time.
+        """
+        overrides = self.config_entry.data.get(CONF_TRAVEL_TIMES) or {}
+        try:
+            val = overrides.get(str(int(channel)))
+        except (TypeError, ValueError):
+            val = None
+        try:
+            if val:
+                return float(val)
+        except (TypeError, ValueError):
+            pass
+        return self.travel_time
 
     def record_estimate(self, channel: int, position: int) -> None:
         """Record our best-guess position for a channel (from a command).

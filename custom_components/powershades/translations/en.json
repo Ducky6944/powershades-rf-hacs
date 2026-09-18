@@ -3,25 +3,27 @@
         "step": {
             "user": {
                 "title": "PowerShades",
-                "description": "Enter your PowerShades **RF gateway** address (local, e.g. `10.0.30.239`).\n\n**Travel time** = how many seconds a shade takes to move fully open to fully closed. We use it to emulate \"set to N%\", which the gateway itself can't do (it only has up/down/stop). Default is 20s — measure yours once if you want precise positions.",
+                "description": "Enter your PowerShades **RF gateway** address (local, e.g. `10.0.30.239`).\n\n**Base travel time** = how many seconds a shade takes to move fully open to fully closed. It's a starting point — you'll refine it per shade in the next step (taller shades are slower). Used to emulate \"set to N%\", which the gateway itself can't do (only up/down/stop). Default 20s.",
                 "data": {
                     "gateway": "RF gateway address",
-                    "travel_time": "Full-travel time (seconds)"
+                    "travel_time": "Base full-travel time (seconds)"
                 }
             },
             "channel": {
-                "title": "Name channel {n} of {m}",
-                "description": "Channel **{n}** is linked.\n\n**Test it**: pick *Up* or *Down* and watch which physical shade moves, then name it (e.g. `FIREPLACE`, `SIDE LEFT`). Leave the name blank to keep using the channel number.\n\nPick *Idle* to move to the next channel without a test.",
+                "title": "Identifying channel {n} of {m}",
+                "description": "This is a linked channel. Pick **Up** or **Down** and tap **Next** to nudge that physical shade — watch which window moves.\n\nDo this as many times as you need to find it. When you've matched it, type a **name** and its **travel time** (seconds, how long it actually takes), tick **Move on to next**, then Next.\n\nLeave name/travel blank to skip them.",
                 "data": {
-                    "action": "Test action",
-                    "name": "Shade name (optional)"
+                    "action": "Nudge (up or down)",
+                    "name": "Name (optional)",
+                    "travel_time": "Travel time for THIS shade, seconds (optional)",
+                    "advance": "I'm done with this shade — move on to the next"
                 }
             },
             "groups": {
                 "title": "Groups (optional)",
-                "description": "Optionally group channels to open / close them together.\n\nOne group per line, format `Name: 1,2,3`.\n\nExample:\n```\nGreat Room: 1,2,3\nOffice: 4,5\n```\n\nLeave blank for no groups.",
+                "description": "Group channels so they open / close together. One group per **line**, format `Name: 1,2,3`.\n\nExample:\n```\nGreat Room: 1,2,3\nOffice: 4,5\n```\n\nLeave blank for no groups.",
                 "data": {
-                    "groups": "Groups"
+                    "groups": "Groups (one per line)"
                 }
             }
         },
@@ -40,10 +42,12 @@
         "step": {
             "init": {
                 "title": "PowerShades options",
-                "description": "Update the full-travel time (used for \"set to N%\") and / or the group list (one line per group, `Name: 1,2,3`).",
+                "description": "Update the **base** travel time, per-shade travel times, names, and groups — without re-adding the integration.\n\nTravel-time and name lines: `channel=value` per line (travel in seconds).\nGroups: `Name: 1,2,3` per line.\n\nLeave any of them blank to leave them unchanged.",
                 "data": {
-                    "travel_time": "Full-travel time (seconds)",
-                    "groups": "Groups"
+                    "travel_time": "Base full-travel time (seconds)",
+                    "groups": "Groups (one per line)",
+                    "travel_times": "Per-shade travel time (one `channel=seconds` per line)",
+                    "channel_names": "Channel names (one `channel=Name` per line)"
                 }
             }
         }

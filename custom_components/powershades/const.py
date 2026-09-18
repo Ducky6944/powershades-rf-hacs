@@ -14,6 +14,9 @@ CONF_GROUPS = "groups"
 # Seconds a shade takes to travel 0->100% (full sweep). Used to approximate
 # "set to X%" by timing a down command after an initial stop.
 CONF_TRAVEL_TIME = "travel_time"
+# Per-channel override of the full-sweep travel time (seconds):
+# {"<channel>": seconds, ...}. Absent / missing key = use CONF_TRAVEL_TIME.
+CONF_TRAVEL_TIMES = "travel_times"
 # Diagnostic metrics the user confirmed are available on their gateway:
 # one or more of "percent", "battery", "rx", "device_id". Absent = infer at
 # setup time (any key seen as non-None in the first gateway read).
