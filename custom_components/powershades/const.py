@@ -11,6 +11,14 @@ PLATFORMS = [Platform.COVER, Platform.BUTTON, Platform.NUMBER, Platform.SENSOR]
 # the goal is "guaranteed open", so overshoot is harmless (the end-stop stops it).
 RESET_UP_SECONDS = 60
 
+# Settle (seconds) after every RF command before the next one is issued. The
+# gateway has a single RF transmitter; firing several channels' up/down/stop
+# frames nearly simultaneously can make frames collide on the shared RF channel,
+# so a missing frame leaves a shade running to its own end-stop (e.g. 0%) instead
+# of stopping at the target. A small pause between commands keeps transmissions
+# clean. Applies to every command (see ``client._gateway_cmd``).
+COMMAND_SETTLE_SECONDS = 0.3
+
 CONF_GATEWAY = "gateway"
 # Optional user-supplied channel -> name map (when names can't be resolved).
 CONF_CHANNEL_NAMES = "channel_names"

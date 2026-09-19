@@ -7,8 +7,10 @@ Two kinds of covers:
   up (full travel) → down (``(100-N) * travel / 100`` s) → stop, which lands on
   N% regardless of where the shade started.
 * **User-group covers** — one per user-defined group. Open / close / stop /
-  **set-to-N%** all fan out to every member channel. The group position is shown
-  only when all members agree; a mixed group reports **no** position (slider
+  **set-to-N%** all fan out to every member channel, one at a time (the gateway
+  has a single RF transmitter, so back-to-back commands to different channels
+  are serialized to avoid frame collisions). The group position is shown only
+  when all members agree; a mixed group reports **no** position (slider
   "unknown") and flags ``position_mixed`` in its extra attributes.
 
 All covers set ``assumed_state=True`` so the UI keeps up / down / stop enabled
@@ -17,7 +19,6 @@ regardless of what the (flaky) gateway reports for position.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -165,8 +166,9 @@ class PowerShadesChannelCover(_AssumedStateCover):
 class PowerShadesLocalGroupCover(_AssumedStateCover):
     """A user-defined group of local channels.
 
-    Open / close / stop / **set-to-N%** all fan out to every member channel in
-    parallel, each using its own travel time and its own last position. The group
+    Open / close / stop / **set-to-N%** all fan out to every member channel,
+    one at a time (serialized to avoid RF frame collisions on the shared
+    transmitter), each using its own travel time and its own last position. The group
     position is only shown when *all* members agree; when they are spread out the
     cover reports **no** position (the HA slider then shows "unknown") and sets
     ``position_mixed`` (with ``position_min`` / ``position_max``) in the extra
@@ -275,9 +277,12 @@ class PowerShadesLocalGroupCover(_AssumedStateCover):
         target = int(kwargs[ATTR_POSITION])
 
         # Move every member to the target, each taking the shortest way from its
-        # own last position. Run in parallel so total time ~= one member's travel,
-        # not the sum of all members'.
-        async def _member(channel: int) -> None:
+        # own last position. Run members ONE AT A TIME (serialized): the gateway
+        # has a single RF transmitter, so parallel members' up/down/stop frames can
+        # collide and a shade may miss its stop and run to its own end-stop (e.g.
+        # 0%) instead of the target. Total time is now the sum of the members'
+        # (shortest-path) travels, which is fine for reliability.
+        for channel in self._channels:
             from_pos = self.coordinator.estimate(channel)
             self.coordinator.record_estimate(channel, target)
             travel = self.coordinator.travel_time_for(channel)
@@ -285,5 +290,3 @@ class PowerShadesLocalGroupCover(_AssumedStateCover):
                 await move_to_position(self.coordinator.client, channel, target, travel, from_pos)
             except Exception as err:
                 _LOGGER.warning("Group '%s' set %d%% on ch%s failed: %s", self._name, target, channel, err)
-
-        await asyncio.gather(*(_member(ch) for ch in self._channels))

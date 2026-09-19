@@ -14,7 +14,7 @@ from typing import Any
 
 import aiohttp
 
-from .const import GW_AJAX_PATH, GW_CMD_QUERY
+from .const import COMMAND_SETTLE_SECONDS, GW_AJAX_PATH, GW_CMD_QUERY
 
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=5)
 
@@ -95,6 +95,10 @@ class PowerShadesClient:
 
     async def _gateway_cmd(self, param: str, channel: int) -> None:
         await self._get(self._cmd_url(param, channel))
+        # Settle: the gateway's single RF transmitter must finish delivering this
+        # command before the next one (on any channel) is sent, or frames collide
+        # and a motor can miss its stop. Cheap insurance against a dropped frame.
+        await asyncio.sleep(COMMAND_SETTLE_SECONDS)
 
     async def gateway_up(self, channel: int) -> None:
         from .const import GW_CMD_UP
