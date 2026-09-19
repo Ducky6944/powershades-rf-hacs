@@ -4,7 +4,12 @@ from homeassistant.const import Platform
 
 DOMAIN = "powershades"
 
-PLATFORMS = [Platform.COVER, Platform.SENSOR]
+PLATFORMS = [Platform.COVER, Platform.BUTTON, Platform.NUMBER, Platform.SENSOR]
+
+# How long (seconds) to drive "up" during a reset so the shade reaches its
+# fully-open end-stop, then we lock the position at 100%. Generous on purpose:
+# the goal is "guaranteed open", so overshoot is harmless (the end-stop stops it).
+RESET_UP_SECONDS = 60
 
 CONF_GATEWAY = "gateway"
 # Optional user-supplied channel -> name map (when names can't be resolved).

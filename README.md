@@ -1,82 +1,130 @@
 # PowerShades for Home Assistant
 
-A HACS-installable custom integration for **PowerShades** motorized window shades, driven by the official **PowerShades cloud API** plus (optionally) the local **RF Gateway** for live state feedback.
+A HACS-installable custom integration for **PowerShades** motorized window shades,
+driven over the **local RF gateway** (the integration's own web server on the
+gateway at your network). No cloud, no email/password, no API keys — the gateway
+is the integration.
 
 ## Features
 
-- **Covers** for every shade in your account — open / close / set position (percentage).
-- **Covers** for every named **group** — open / close / set position.
-- **Buttons** for every named **scene** (one press = activate the scene).
-- **Sensors** (per local-gateway channel) for **position**, **battery**, and **RF level** — only created for channels that have a paired device.
-- **JWT auth** (email + password) with automatic token refresh and re-login on expiry.
+- **Cover** per RF channel — open / close / stop, plus **set to N%** (emulated:
+  the gateway only knows up / down / stop, so we time a fractional full-travel move).
+  - Position shown is your **live estimate** (what we last commanded). If you *trust* the
+    gateway's live read for a particular shade, set its **position source** to *gateway*
+    in setup or the options flow.
+- **Cover** per **user group** — open / close / stop fan out to every member channel.
+- **Button** per channel — **Reset** (drive fully open and lock the position at 100%),
+  to re-sync a shade whose recorded position has drifted.
+- **Number** per channel — **travel time** (seconds for a full 0↔100% travel). Editable
+  at any time; drives the accuracy of "set to N%".
+- **Sensors** per channel (diagnostic) — gateway **battery**, **RF level (rx)**, device id,
+  and an **estimated position** — only created for channels that actually have a paired device.
 
 ## How it works
 
-| Concern | Transport |
+| Concern | How |
 |---|---|
-| **Control** (open / close / set %, groups, scenes) | PowerShades **cloud REST API** (`api.powershades.com`) — the canonical control plane. |
-| **State / feedback** (position, battery, RF) | Local **RF Gateway** web server (`ajax.shtml`) — optional; only reports for channels that have a paired device. |
+| **Control** (open / close / stop / set %, groups) | Local gateway HTTP (`ajax.shtml`) |
+| **State / feedback** (battery, rx, device id) | Local gateway HTTP (`ajax.shtml`) |
+| **"Set to N%"** | Timed move — up/down for a fraction of a full sweep (`travel_time` is per-channel adjustable) |
+| **Position read-out** | Live *estimate* (default) or the gateway's live read (opt-in per channel) |
 
-> The cloud API has **no per-shade position read** available to consumer accounts (the `/devices/` endpoint is dealer-gated). Live position comes from the **local gateway**, which is organized by **RF channel** (not by shade name). We do **not** try to map channels to shade names; the two planes are exposed independently.
-
-To get live positions, pair a shade to a gateway channel via the gateway web UI (`/device.shtml` → **Pair / Link Feedback**), then the corresponding channel sensor appears.
+The gateway is organized by **RF channel** (1–30), not by shade name. Pair a shade to a
+channel in the gateway's web UI (`/device.shtml` → **Pair / Link Feedback**), and that
+channel becomes a cover here.
 
 ## Semantics
 
-- Cloud `percentage`: `0` = fully open/raised, `100` = fully down/closed.
-- Home Assistant cover position: `0` = closed, `100` = open.
-- The integration maps these automatically (HA `0` → cloud `100`, HA `100` → cloud `0`).
+- Gateway `percent`: `0` = fully closed/down, `100` = fully open/up.
+- Home Assistant cover position: `0` = closed, `100` = open. The mapping is identity.
+- **Set to N%** uses your `travel_time` (per channel) to time a move. Keep it close to
+  the shade's real full-travel time, or use the **Reset** button to re-baseline after drift.
 
 ## Install (HACS)
 
-1. In HACS: **Settings → Custom repositories → **+** → add this repo's URL** (or install as a local integration).
-2. HACS → **Integrations → search "PowerShades" → Install**.
+1. HACS → **Settings → Custom repositories → +** → add this repo's URL.
+2. HACS → **Integrations → PowerShades → Install**.
 3. Restart Home Assistant.
-4. **Settings → Devices & Services → Add integration → "PowerShades"**.
+4. Settings → **Devices & Services → Add integration → "PowerShades"** — enter the
+   gateway's IP/hostname and a *base* travel time, then identify each channel
+   (nudge up/down until you see the shade move, name it, set its travel time and
+   position source), then optionally define groups.
 
-## Config flow
+## Semantics of "set to N%"
 
-| Field | Required | Notes |
-|---|---|---|
-| **Email** | yes | Your PowerShades cloud account email |
-| **Password** | yes | That account's password |
-| **API base URL** | no | Default `https://api.powershades.com` (self-hosted / test override) |
-| **Local RF Gateway address** | no | e.g. `192.0.2.48` (no scheme, IP only) — enables live sensors |
+- When we already know a channel's position, we move the **shortest** direction
+  for just the needed distance — no full-travel calibration leg.
+- When the position is **unknown** (e.g. first move after a Home Assistant restart),
+  we calibrate first: full up (≈ `travel_time`, known 100%), then down by the remainder.
+- If your position is out of sync, press the channel's **Reset** button — it drives
+  fully open and locks the position at 100%.
 
 ## Development
 
 ```bash
 git clone <this-repo>
-# test the client against your account without HA:
 python3 -c "import custom_components.powershades.client as c; print(c.PowerShadesClient)"
 ```
 
-Run the linter:
+Lint:
 
 ```bash
 pip install -r requirements-dev.txt
 ruff check custom_components/powershades/
+ruff format --check custom_components/powershades/
 ```
 
 ## Layout
 
 ```
 custom_components/powershades/
-  __init__.py       # setup / unload, forwards platforms
-  const.py          # domain, config keys, endpoint paths
-  client.py         # JWT auth + cloud API (aiohttp)
-  config_flow.py    # email/password flow, validates login
-  coordinator.py    # DataUpdateCoordinator: cloud lists + gateway state
-  cover.py          # covers (shades + groups)
-  button.py         # scene buttons
-  sensor.py         # per-channel gateway sensors (position/battery/rx)
-  strings.json      # config flow UI strings
+  __init__.py        # setup / unload, forwards platforms
+  const.py           # domain, config keys, gateway endpoints
+  client.py          # local gateway client (ajax.shtml read / up / down / stop)
+  _movement.py       # timed move-to + open fully + relative shortest-path move
+  config_flow.py     # gateway → per-channel (nudge/name/travel/source) → groups
+  coordinator.py     # DataUpdateCoordinator: 3s gateway poll, state + device info
+  cover.py           # one cover per channel (+ set position) and per group
+  button.py          # per-channel "Reset (open fully)" button
+  number.py          # per-channel travel-time number (editable)
+  sensor.py          # per-channel diagnostics (battery / rx / device id / estimate)
+  types.py           # shared data classes
+  brand/             # HACS logo / icon (512x512)
+  strings.json       # config + options flow UI strings
   translations/en.json
-  icons.png         # HACS icon
 ```
 
 ## Notes / limitations
 
-- **Position is "set-and-optimistic" until a local gateway channel is paired** — the cloud API has no consumer-readable per-shade position. Once paired, the channel sensors show the real reported position.
-- Cloud tokens are short-lived; the client refreshes on 401 and re-logs if the refresh fails.
-- Polling: gateway state is checked every ~10 s; cloud lists are cached and re-fetched at most every few minutes to avoid hammering the cloud.
+- **Position is set-and-optimistic by design**: the gateway reports a `percent` but
+  it can be stale or jump while a shade is mid-travel, so the integration defaults to
+  showing your *estimated* position (what you last commanded). You can opt into the
+  gateway's live read per channel if you prefer.
+- **The gateway has no "set to N%"** endpoint — only up / down / stop. "Set position"
+  is a timed approximation; its accuracy depends on how close `travel_time` is to the
+  shade's real full-travel time. Use **Reset** to re-baseline after drift.
+- **Restart behavior**: after a Home Assistant restart we can't remember each channel's
+  position, so the first "set to N%" per channel calibrates from fully open. Open/close
+  always work (they end-stop on their own).
+- **Polling**: gateway state polled every 3 s.
+
+## Lessons learned (for contributors)
+
+Hard-won, non-obvious things — read before changing the setup/control code:
+
+- **The gateway has no absolute "set to N%"** — only `up` / `down` / `stop`.
+  "Set position" is a *timed* move; its accuracy is entirely `travel_time` × distance.
+- **`set_position` must know the start.** When it does (our estimate), it moves the
+  *shortest* way. When it doesn't (after a restart), it calibrates from fully open.
+  Never both — record the estimate *before* overwriting it, or `from_position == target`
+  and nothing moves.
+- **Position read-back from the gateway is unreliable** (stale / mid-travel). Default to
+  the *estimate* (what you last commanded); expose the live read as an opt-in per channel.
+- **Use `assumed_state=True` on covers** so Open/Close buttons stay enabled no matter
+  what the position reads (the HA frontend greys them out on `open`/`closed` otherwise).
+- **`async_show_form` here is called with `step_id=` / `data_schema=` kwargs.** (This HA
+  build has no `ConfigEntryOptionsFlow` — use `OptionsFlowWithConfigEntry(config_entry)`.)
+- **`vol.Coerce(float)` raises on `""`** — for optional numeric fields, coerce to `str`
+  and parse in the handler (blank = unchanged).
+- **A module-level helper called as `self.method(...)` is an `AttributeError` on every
+  refresh** (looked like "setup failed"). Call it as a bare function.

@@ -1,13 +1,19 @@
 {
   "domain": "powershades",
   "name": "PowerShades",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "config_flow": true,
   "documentation": "https://github.com/Ducky6944/powershades-rf-hacs",
   "issue_tracker": "https://github.com/Ducky6944/powershades-rf-hacs/issues",
-  "codeowners": ["@Ducky6944"],
-  "requirements": ["aiohttp"],
+  "codeowners": [
+    "@Ducky6944"
+  ],
+  "requirements": [
+    "aiohttp"
+  ],
   "iot_class": "local_polling",
   "integration_type": "hub",
-  "after_dependencies": ["http"]
+  "after_dependencies": [
+    "http"
+  ]
 }

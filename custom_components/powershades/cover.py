@@ -142,14 +142,25 @@ class PowerShadesChannelCover(_AssumedStateCover):
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
         await self.coordinator.client.gateway_stop(self._channel)
+        # Stopping mid-travel leaves the shade somewhere we don't time-tracked.
+        # Best-effort: if the gateway has a live reading, re-anchor to it.
+        ch = self._ch()
+        if ch is not None and ch.percent is not None:
+            self.coordinator.record_estimate(self._channel, int(ch.percent))
+        else:
+            self.coordinator.clear_estimate(self._channel)
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         target = int(kwargs[ATTR_POSITION])
+        # Read our last known position *before* we update it, so we can move the
+        # shortest way to the target (no full-travel calibration leg). None =
+        # unknown → set_position falls back to calibrating from fully open.
+        from_pos = self.coordinator.estimate(self._channel)
         # Record the target up front (optimistic) so the UI shows it for the
         # whole move — consistent with open/close, which also set instantly.
         self.coordinator.record_estimate(self._channel, target)
         travel = self.coordinator.travel_time_for(self._channel)
-        await move_to_position(self.coordinator.client, self._channel, target, travel)
+        await move_to_position(self.coordinator.client, self._channel, target, travel, from_pos)
 
 
 class PowerShadesLocalGroupCover(_AssumedStateCover):

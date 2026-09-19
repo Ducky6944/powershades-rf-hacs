@@ -117,6 +117,11 @@ class PowerShadesCoordinator(DataUpdateCoordinator[PowerShadesData]):
     def estimate(self, channel: int) -> int | None:
         return self._estimates.get(int(channel))
 
+    def clear_estimate(self, channel: int) -> None:
+        """Drop a channel's recorded position (e.g. after a stop whose position
+        we can't read) so the next set_position re-calibrates from open."""
+        self._estimates.pop(int(channel), None)
+
     @property
     def channel_names(self) -> dict[str, str]:
         """User-supplied channel -> name map (keys are strings of the channel).
