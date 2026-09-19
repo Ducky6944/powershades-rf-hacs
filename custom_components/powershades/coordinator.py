@@ -118,17 +118,25 @@ class PowerShadesCoordinator(DataUpdateCoordinator[PowerShadesData]):
         return self._estimates.get(int(channel))
 
     def resolve_position(self, channel: int) -> int | None:
-        """The cover's "current position" for a channel, honoring
-        ``position_source``. ``None`` = unknown (never reported, no estimate).
+        """The cover's "current position" for a channel.
+
+        The **estimate** (what we last commanded, tracked by our own timer math)
+        is the source of truth and is returned independent of what the gateway
+        reports — a channel dropping out of a transient/read-missing gateway
+        read must NOT blank a position we already know. ``None`` = we have no
+        estimate for the channel (never commanded, or cleared by a stop).
+
+        ``position_source = gateway`` opts in to showing the live gateway read
+        *when it has one*; if that read is blank we fall back to the estimate so
+        the cover never flips to "unknown" just because the gateway is quiet.
         Shared by the single-shade cover and the group cover so both agree.
         """
-        data = self.data
-        ch = data.channel(int(channel)) if data else None
-        if ch is None:
-            return None
-        if self.position_source_for(channel) == POSITION_SOURCE_GATEWAY:
-            return int(ch.percent) if ch.percent is not None else None
         est = self.estimate(channel)
+        if self.position_source_for(channel) == POSITION_SOURCE_GATEWAY:
+            data = self.data
+            ch = data.channel(int(channel)) if data else None
+            if ch is not None and ch.percent is not None:
+                return int(ch.percent)
         return int(est) if est is not None else None
 
     def clear_estimate(self, channel: int) -> None:

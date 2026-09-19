@@ -31,8 +31,8 @@ is the integration.
 | **Control** (open / close / stop / set %, groups) | Local gateway HTTP (`ajax.shtml`) |
 | **State / feedback** (battery, rx, device id) | Local gateway HTTP (`ajax.shtml`) |
 | **"Set to N%"** | Timed move — up/down for a fraction of a full sweep (`travel_time` is per-channel adjustable) |
-| **Position read-out** | Live *estimate* (default) or the gateway's live read (opt-in per channel) |
-| **Cover state (open / closed / unknown)** | Derived from the same position read-out (the *estimate*), not the gateway's live read |
+| **Position read-out** | The *estimate* (our own timer math) — always shown, independent of the gateway. Opt-in per channel to *prefer* the live read when available |
+| **Cover state (open / closed / unknown)** | Derived from the same estimate-based position, so state and slider always agree |
 | **Transient gateway hiccups** | Short retry with backoff on connection drops (e.g. "connection reset by peer") before giving up |
 
 The gateway is organized by **RF channel** (1–30), not by shade name. Pair a shade to a
@@ -124,8 +124,15 @@ Hard-won, non-obvious things — read before changing the setup/control code:
   *shortest* way. When it doesn't (after a restart), it calibrates from fully open.
   Never both — record the estimate *before* overwriting it, or `from_position == target`
   and nothing moves.
-- **Position read-back from the gateway is unreliable** (stale / mid-travel). Default to
-  the *estimate* (what you last commanded); expose the live read as an opt-in per channel.
+- **The estimate is the source of truth — don't gate it on the live read.**
+  `resolve_position` returns `estimate(channel)` **independent** of whether the channel
+  appears in the last gateway poll. If it first did `ch = data.channel(n); if ch is None:
+  return None`, the moment a channel dropped out of a read (flaky gateway, no `percent`
+  AND no `device_id`, or a timed-out poll) a perfectly-known 25 became **Unknown**. Group
+  + shade positions are *always* calculated off our own timer math, not what the RF gate reports.
+- **`position_source = gateway` = "prefer live read, fall back to estimate."** It never
+  forces Unknown on its own: if the gateway has a `percent` for that channel, show it;
+  otherwise show the estimate. This is the "use the gate if it's actually reporting" case.
 - **Cover *state* and *position* must come from the same source.** A cover's open/closed/
   **unknown** state is driven by `is_closed`; if that still read the flaky gateway `percent`
   while the slider read the estimate, the shade showed **Unknown at every percentage** even
