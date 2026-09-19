@@ -9,8 +9,9 @@ is the integration.
 
 - **Cover** per RF channel — open / close / stop, plus **set to N%** (emulated:
   the gateway only knows up / down / stop, so we time a fractional full-travel move).
-  - Position shown is your **live estimate** (what we last commanded). If you *trust* the
-    gateway's live read for a particular shade, set its **position source** to *gateway*
+  - Both the **state** (open / closed / unknown) and the **position slider** are driven by
+    your **live estimate** (what we last commanded), not the gateway's live read. If you *trust*
+    the gateway's live read for a particular shade, set its **position source** to *gateway*
     in setup or the options flow.
 - **Cover** per **user group** — open / close / stop and **set to N%** all fan out to
   every member channel. The group shows a **position slider only when all members
@@ -31,6 +32,8 @@ is the integration.
 | **State / feedback** (battery, rx, device id) | Local gateway HTTP (`ajax.shtml`) |
 | **"Set to N%"** | Timed move — up/down for a fraction of a full sweep (`travel_time` is per-channel adjustable) |
 | **Position read-out** | Live *estimate* (default) or the gateway's live read (opt-in per channel) |
+| **Cover state (open / closed / unknown)** | Derived from the same position read-out (the *estimate*), not the gateway's live read |
+| **Transient gateway hiccups** | Short retry with backoff on connection drops (e.g. "connection reset by peer") before giving up |
 
 The gateway is organized by **RF channel** (1–30), not by shade name. Pair a shade to a
 channel in the gateway's web UI (`/device.shtml` → **Pair / Link Feedback**), and that
@@ -123,6 +126,13 @@ Hard-won, non-obvious things — read before changing the setup/control code:
   and nothing moves.
 - **Position read-back from the gateway is unreliable** (stale / mid-travel). Default to
   the *estimate* (what you last commanded); expose the live read as an opt-in per channel.
+- **Cover *state* and *position* must come from the same source.** A cover's open/closed/
+  **unknown** state is driven by `is_closed`; if that still read the flaky gateway `percent`
+  while the slider read the estimate, the shade showed **Unknown at every percentage** even
+  though the slider was right. Derive both from `resolve_position(channel)` (the estimate).
+- **The local gateway drops idle/reused sockets** (`[Errno 104] Connection reset by peer`).
+  Retry transient `ClientConnectionError`/`TimeoutError` a couple times with a short backoff
+  before giving up — otherwise a single blip makes a whole "set to N%" leg "fail" in the log.
 - **Use `assumed_state=True` on covers** so Open/Close buttons stay enabled no matter
   what the position reads (the HA frontend greys them out on `open`/`closed` otherwise).
 - **`async_show_form` here is called with `step_id=` / `data_schema=` kwargs.** (This HA

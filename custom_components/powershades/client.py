@@ -8,6 +8,7 @@ lived state of its own. All I/O is over HTTP to the local RF gateway:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -49,14 +50,28 @@ class PowerShadesClient:
 
     # -- low level ---------------------------------------------------------
 
-    async def _get(self, url: str) -> str:
-        try:
-            async with self._session.get(url, timeout=DEFAULT_TIMEOUT) as resp:
-                if not (200 <= resp.status < 300):
-                    raise PowerShadesUnavailable(f"HTTP {resp.status} for {url}")
-                return await resp.text()
-        except (aiohttp.ClientError, TimeoutError) as err:
-            raise PowerShadesUnavailable(str(err)) from err
+    _TRANSIENT = (aiohttp.ClientConnectionError, TimeoutError)
+
+    async def _get(self, url: str, *, retries: int = 2) -> str:
+        """GET a url's body, retrying transient connection drops (ECONNRESET, etc.)
+        with a short backoff. The local gateway is a single-socket, often-kept-alive
+        server that can reset an idle/reused connection mid-request, so retrying
+        once or twice before giving up avoids spurious "connection reset" warnings.
+        """
+        last: Exception | None = None
+        for attempt in range(retries + 1):
+            try:
+                async with self._session.get(url, timeout=DEFAULT_TIMEOUT) as resp:
+                    if not (200 <= resp.status < 300):
+                        raise PowerShadesUnavailable(f"HTTP {resp.status} for {url}")
+                    return await resp.text()
+            except self._TRANSIENT as err:
+                last = err
+                if attempt < retries:
+                    await asyncio.sleep(0.25 * (attempt + 1))
+            except aiohttp.ClientError as err:
+                raise PowerShadesUnavailable(str(err)) from err
+        raise PowerShadesUnavailable(str(last)) from last
 
     # -- gateway read ------------------------------------------------------
 

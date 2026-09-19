@@ -99,17 +99,20 @@ class PowerShadesChannelCover(_AssumedStateCover):
 
     @property
     def is_closed(self) -> bool | None:
-        ch = self._ch()
-        if ch is None or ch.percent is None:
+        # State must track the estimate (what we last commanded), not the flaky
+        # live gateway read — otherwise a "set to N%" shows the right slider but
+        # the state still reads Unknown when the gateway isn't reporting.
+        pos = self.coordinator.resolve_position(self._channel)
+        if pos is None:
             return None
-        return ch.percent < 2
+        return pos == 0
 
     @property
     def is_open(self) -> bool | None:
-        ch = self._ch()
-        if ch is None or ch.percent is None:
+        pos = self.coordinator.resolve_position(self._channel)
+        if pos is None:
             return None
-        return ch.percent > 98
+        return pos > 0
 
     @property
     def is_opening(self) -> bool:
@@ -185,43 +188,40 @@ class PowerShadesLocalGroupCover(_AssumedStateCover):
     def name(self) -> str | None:
         return self._name
 
-    def _positions(self) -> list[int]:
-        """Last known position of each member (estimate/gateway per its setting)."""
-        return [p for p in (self.coordinator.resolve_position(ch) for ch in self._channels) if p is not None]
+    def _common_position(self) -> int | None:
+        """The group's single position: the shared value when *every* member is
+        known and agrees, else ``None`` (unknown — mixed or a member unreported).
+
+        ``current_cover_position``, ``is_open`` and ``is_closed`` all derive from
+        this, so the slider and the state always tell the same story.
+        """
+        resolved = [self.coordinator.resolve_position(ch) for ch in self._channels]
+        if any(p is None for p in resolved):
+            return None
+        return resolved[0] if len(set(resolved)) == 1 else None
 
     @property
     def current_cover_position(self) -> int | None:
-        """The shared position when every member agrees, else None ("unknown").
-
-        None both renders the HA slider as "unknown / mixed" and is what the
-        frontend uses to hide the slider value — the "nothing" option.
-        """
-        positions = self._positions()
-        if not positions:
-            return None
-        return positions[0] if len(set(positions)) == 1 else None
+        """Shared position when all members agree, else None (slider "unknown")."""
+        return self._common_position()
 
     @property
     def is_closed(self) -> bool | None:
-        positions = self._positions()
-        if not positions:
-            return None
-        if all(p < 2 for p in positions):
-            return True
-        if all(p > 98 for p in positions):
-            return False
-        return None  # spread out → indeterminate (state shows "unknown")
+        p = self._common_position()
+        if p is None:
+            return None  # mixed / unknown → state "unknown"
+        return p == 0
 
     @property
     def is_open(self) -> bool | None:
-        positions = self._positions()
-        if not positions:
+        p = self._common_position()
+        if p is None:
             return None
-        if all(p < 2 for p in positions):
-            return False
-        if all(p > 98 for p in positions):
-            return True
-        return None  # spread out → indeterminate
+        return p > 0
+
+    def _positions(self) -> list[int]:
+        """Resolved positions of known members (for min/max / mixed detail)."""
+        return [p for p in (self.coordinator.resolve_position(ch) for ch in self._channels) if p is not None]
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
