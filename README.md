@@ -12,7 +12,10 @@ is the integration.
   - Position shown is your **live estimate** (what we last commanded). If you *trust* the
     gateway's live read for a particular shade, set its **position source** to *gateway*
     in setup or the options flow.
-- **Cover** per **user group** — open / close / stop fan out to every member channel.
+- **Cover** per **user group** — open / close / stop and **set to N%** all fan out to
+  every member channel. The group shows a **position slider only when all members
+  agree**; if the shades are spread out, the position reads **unknown** and the extra
+  attributes set `position_mixed: true` (with `position_min` / `position_max`).
 - **Button** per channel — **Reset** (drive fully open and lock the position at 100%),
   to re-sync a shade whose recorded position has drifted.
 - **Number** per channel — **travel time** (seconds for a full 0↔100% travel). Editable

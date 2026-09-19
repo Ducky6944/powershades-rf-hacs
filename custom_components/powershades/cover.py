@@ -6,9 +6,10 @@ Two kinds of covers:
   gateway's up / down / stop. **Set to N%** is emulated via the timed routine:
   up (full travel) → down (``(100-N) * travel / 100`` s) → stop, which lands on
   N% regardless of where the shade started.
-* **User-group covers** — one per user-defined group. Open / close / stop fan
-  out to every member channel. No set_position on groups (members can drift,
-  so a single target on the group is ambiguous; use the channel covers for that).
+* **User-group covers** — one per user-defined group. Open / close / stop /
+  **set-to-N%** all fan out to every member channel. The group position is shown
+  only when all members agree; a mixed group reports **no** position (slider
+  "unknown") and flags ``position_mixed`` in its extra attributes.
 
 All covers set ``assumed_state=True`` so the UI keeps up / down / stop enabled
 regardless of what the (flaky) gateway reports for position.
@@ -16,6 +17,7 @@ regardless of what the (flaky) gateway reports for position.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -31,7 +33,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from ._movement import close_channel, open_channel, set_position as move_to_position
-from .const import DOMAIN, POSITION_SOURCE_GATEWAY
+from .const import DOMAIN
 from .coordinator import PowerShadesCoordinator
 from .types import GatewayChannel, GroupInfo
 
@@ -119,13 +121,7 @@ class PowerShadesChannelCover(_AssumedStateCover):
 
     @property
     def current_cover_position(self) -> int | None:
-        ch = self._ch()
-        if ch is None:
-            return None
-        if self.coordinator.position_source_for(self._channel) == POSITION_SOURCE_GATEWAY:
-            return int(ch.percent) if ch.percent is not None else None
-        est = self.coordinator.estimate(self._channel)
-        return int(est) if est is not None else None
+        return self.coordinator.resolve_position(self._channel)
 
     @property
     def available(self) -> bool:
@@ -164,9 +160,19 @@ class PowerShadesChannelCover(_AssumedStateCover):
 
 
 class PowerShadesLocalGroupCover(_AssumedStateCover):
-    """A user-defined group of local channels; open/close/stop fan out to each."""
+    """A user-defined group of local channels.
 
-    _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP
+    Open / close / stop / **set-to-N%** all fan out to every member channel in
+    parallel, each using its own travel time and its own last position. The group
+    position is only shown when *all* members agree; when they are spread out the
+    cover reports **no** position (the HA slider then shows "unknown") and sets
+    ``position_mixed`` (with ``position_min`` / ``position_max``) in the extra
+    attributes — this is the "Mixed / do nothing" behavior.
+    """
+
+    _attr_supported_features = (
+        CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP | CoverEntityFeature.SET_POSITION
+    )
 
     def __init__(self, coordinator: PowerShadesCoordinator, group: GroupInfo) -> None:
         super().__init__(coordinator)
@@ -179,17 +185,55 @@ class PowerShadesLocalGroupCover(_AssumedStateCover):
     def name(self) -> str | None:
         return self._name
 
+    def _positions(self) -> list[int]:
+        """Last known position of each member (estimate/gateway per its setting)."""
+        return [p for p in (self.coordinator.resolve_position(ch) for ch in self._channels) if p is not None]
+
     @property
     def current_cover_position(self) -> int | None:
-        return None
+        """The shared position when every member agrees, else None ("unknown").
+
+        None both renders the HA slider as "unknown / mixed" and is what the
+        frontend uses to hide the slider value — the "nothing" option.
+        """
+        positions = self._positions()
+        if not positions:
+            return None
+        return positions[0] if len(set(positions)) == 1 else None
 
     @property
     def is_closed(self) -> bool | None:
-        return None
+        positions = self._positions()
+        if not positions:
+            return None
+        if all(p < 2 for p in positions):
+            return True
+        if all(p > 98 for p in positions):
+            return False
+        return None  # spread out → indeterminate (state shows "unknown")
 
     @property
     def is_open(self) -> bool | None:
-        return None
+        positions = self._positions()
+        if not positions:
+            return None
+        if all(p < 2 for p in positions):
+            return False
+        if all(p > 98 for p in positions):
+            return True
+        return None  # spread out → indeterminate
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        positions = self._positions()
+        if not positions:
+            return {}
+        return {
+            "position_mixed": len(set(positions)) > 1,
+            "position_min": min(positions),
+            "position_max": max(positions),
+            "members": len(self._channels),
+        }
 
     async def _fan(self, kind: str) -> None:
         client = self.coordinator.client
@@ -206,9 +250,40 @@ class PowerShadesLocalGroupCover(_AssumedStateCover):
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         await self._fan("up")
+        # All members target fully open; record up front (optimistic) like a single shade.
+        for channel in self._channels:
+            self.coordinator.record_estimate(channel, 100)
 
     async def async_close_cover(self, **kwargs: Any) -> None:
         await self._fan("down")
+        for channel in self._channels:
+            self.coordinator.record_estimate(channel, 0)
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
         await self._fan("stop")
+        # Re-anchor each member to a live gateway read if we have one, else drop
+        # the estimate so its next set_position re-calibrates — mirroring a single shade.
+        data = self.coordinator.data
+        for channel in self._channels:
+            ch = data.channel(channel) if data else None
+            if ch is not None and ch.percent is not None:
+                self.coordinator.record_estimate(channel, int(ch.percent))
+            else:
+                self.coordinator.clear_estimate(channel)
+
+    async def async_set_cover_position(self, **kwargs: Any) -> None:
+        target = int(kwargs[ATTR_POSITION])
+
+        # Move every member to the target, each taking the shortest way from its
+        # own last position. Run in parallel so total time ~= one member's travel,
+        # not the sum of all members'.
+        async def _member(channel: int) -> None:
+            from_pos = self.coordinator.estimate(channel)
+            self.coordinator.record_estimate(channel, target)
+            travel = self.coordinator.travel_time_for(channel)
+            try:
+                await move_to_position(self.coordinator.client, channel, target, travel, from_pos)
+            except Exception as err:
+                _LOGGER.warning("Group '%s' set %d%% on ch%s failed: %s", self._name, target, channel, err)
+
+        await asyncio.gather(*(_member(ch) for ch in self._channels))

@@ -117,6 +117,20 @@ class PowerShadesCoordinator(DataUpdateCoordinator[PowerShadesData]):
     def estimate(self, channel: int) -> int | None:
         return self._estimates.get(int(channel))
 
+    def resolve_position(self, channel: int) -> int | None:
+        """The cover's "current position" for a channel, honoring
+        ``position_source``. ``None`` = unknown (never reported, no estimate).
+        Shared by the single-shade cover and the group cover so both agree.
+        """
+        data = self.data
+        ch = data.channel(int(channel)) if data else None
+        if ch is None:
+            return None
+        if self.position_source_for(channel) == POSITION_SOURCE_GATEWAY:
+            return int(ch.percent) if ch.percent is not None else None
+        est = self.estimate(channel)
+        return int(est) if est is not None else None
+
     def clear_estimate(self, channel: int) -> None:
         """Drop a channel's recorded position (e.g. after a stop whose position
         we can't read) so the next set_position re-calibrates from open."""
